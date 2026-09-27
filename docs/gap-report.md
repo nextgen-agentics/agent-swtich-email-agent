@@ -1,10 +1,5 @@
 # Gap report — AgentSwitch Email vs AI-native email
 
-> **Purpose:** week-one deliverable, the brief's three questions. **Audience:** course instructors.
-> **Hand-written**, 2026-09-27. AgentSwitch facts were checked live (web screens, REST, MCP tools) between
-> 24 and 27 Sep. Competitor facts come from the vendors' own pages (links at the end). Background:
-> [gap-report-research.md](gap-report-research.md).
-
 **Who we compare against.** **Shortwave** is the main benchmark. It rebuilt email around AI instead of adding a
 chat window to an old inbox, and costs $30–$120 per user per month. Three others add features Shortwave lacks:
 **Superhuman** (automatic follow-up reminders, one-line summaries that update, and an assistant that works inside
