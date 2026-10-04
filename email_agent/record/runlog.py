@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from email_agent.contracts.agent import RunContext, RunRequest, WriteRecord
 from email_agent.contracts.runlog import LlmStep
-from email_agent.jsonio import dump_json
+from email_agent.record.jsonio import dump_json
 
 
 class RunLog:
@@ -32,6 +32,17 @@ class RunLog:
         self.dir.mkdir(parents=True, exist_ok=False)
         self.writes: list[WriteRecord] = []
         self.on_step = on_step
+
+    @classmethod
+    def reopen(cls, run_dir: Path, on_step: Callable[[BaseModel], None] | None = None) -> "RunLog":
+        """An existing run folder, for `--resume`: steps and writes are appended; final.json, outcome.json and
+        report.md are written again at the end."""
+        log = cls.__new__(cls)
+        log.dir, log.on_step = run_dir, on_step
+        path = run_dir / "writes.jsonl"
+        log.writes = [WriteRecord.model_validate_json(x) for x in (path.read_text().splitlines() if path.exists() else [])
+                      if x.strip()]
+        return log
 
     def write(self, name: str, model: BaseModel) -> None:
         dump_json(self.dir / name, model)

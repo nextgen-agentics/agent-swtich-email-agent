@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from email_agent.contracts.skills import SkillCatalogEntry, SkillSpec
 
-SKILLS_DIR = Path(__file__).parent / "skills"
+SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
 
 class SkillError(Exception):

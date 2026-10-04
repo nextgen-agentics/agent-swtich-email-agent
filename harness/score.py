@@ -14,7 +14,7 @@ import asyncio
 from pathlib import Path
 
 from email_agent.config import PROJECT_ROOT, get_settings
-from email_agent.jsonio import dump_json
+from email_agent.record.jsonio import dump_json
 from harness.contracts import SavedRun, ScoreReport, Verdict
 from harness.db import DbSnapshot, snapshot
 from harness.predicates import check_all, worst

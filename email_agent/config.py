@@ -14,6 +14,7 @@ from pydantic import BaseModel, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+HOUSE_RULES_CHARS = 4000
 
 
 class Instance(BaseModel):
@@ -84,16 +85,54 @@ class Settings(BaseSettings):
     llm_breaker_s: float = 60.0        # an option with server trouble rests this long before it is tried again
     llm_timeout_s: float = 180.0       # one model call; past it (or a hard ceiling per option) = server trouble
 
-    max_steps: int = 20
+    # the graph (Revision 12): limits per run, all saved in run.sqlite so a resumed run keeps what it spent
+    max_workers: int = 6               # graph nodes running at once
+    llm_concurrency: int = 3           # LLM calls at once (Gemini limits are per key)
+    mcp_concurrency: int = 2           # MCP calls at once (Stage 0: the server answers our calls one at a time)
+    mcp_call_timeout_s: float = 90.0   # one MCP call; past it the call fails alone (the transport's own 300 s read
+                                       # timeout would end the whole session: price-keystone, 2026-10-04)
+    mcp_open_timeout_s: float = 60.0   # opening a session: token check + handshake (a harness batch stalled 8 min
+    mcp_close_timeout_s: float = 20.0  # between tasks, 2026-10-04); closing it: the session DELETE
+    max_planner_rounds: int = 12
+    validate_verdicts: bool = True     # cross-model check of write-causing verdicts before writing (Stage 5)
+    max_llm_calls: int = 80
+    max_nodes: int = 80                # every node, shards included
     http_timeout_s: float = 60.0
     cache_dir: Path = PROJECT_ROOT / ".cache"
     data_dir: Path = PROJECT_ROOT / "data"
     runs_dir: Path = PROJECT_ROOT / "runs"
+    state_dir: Path = PROJECT_ROOT / "state"           # local mailbox copy per instance (Revision 12), not in git
+    rules_dir: Path = PROJECT_ROOT / "rules"           # your house rules per instance, <instance>.md (Stage 7), in git
+    subscriptions_file: Path = PROJECT_ROOT / "watch" / "subscriptions.yaml"   # the inbox watcher's (Stage 8), in git
+    watch_interval_s: float = 120.0    # the watcher polls this often (there is no push from the platform)
+    watch_max_runs: int = 2            # runs the watcher starts at once
+    # meaning-based search (Stage 9): "fts" = full-text only (default until scripts/agent/eval_search.py says otherwise);
+    # "hybrid" = Gemini embeddings + FAISS, mixed with full text
+    search: Literal["fts", "hybrid"] = "fts"
+    embed_model: str = "gemini-embedding-001"   # one vector per text (gemini-embedding-2 merges a list into one)
+    embed_dims: int = 768
+    embed_per_minute: int = 90         # texts per minute: the free tier counts each text as a request, 100 a minute
+    search_vector_candidates: int = 10 # hybrid judge_threads: at most N conversations added by meaning …
+    search_vector_margin: float = 0.04 # … and only those within this of the best meaning score (on the 20 draft
+                                       # queries: every expected conversation kept, 0.3 wrong extras per query;
+                                       # a plain top 10 added half of Suryodaya's 20 conversations)
+    memory_vector_floor: float = 0.65  # hybrid recall without a party: a memory this close counts as matching
 
     def instance(self, name: str) -> Instance:
         if name not in INSTANCES:
             raise KeyError(f"unknown instance {name!r}; known: {sorted(INSTANCES)}")
         return INSTANCES[name]
+
+    def house_rules(self, instance: str) -> str | None:
+        """rules/<instance>.md, if you wrote one: standing instructions for this book (memory layer 1), at most
+        HOUSE_RULES_CHARS (the rest is cut, and the cut is said)."""
+        path = self.rules_dir / f"{instance}.md"
+        if not path.is_file():
+            return None
+        text = path.read_text().strip()
+        if len(text) > HOUSE_RULES_CHARS:
+            text = text[:HOUSE_RULES_CHARS] + f"\n[… cut: rules/{instance}.md is longer than {HOUSE_RULES_CHARS} characters]"
+        return text or None
 
     def gemini_keys(self) -> list[tuple[int, SecretStr]]:
         """(slot, key) for every Gemini key that is set, in failover order. Slots are what logs show — never keys."""

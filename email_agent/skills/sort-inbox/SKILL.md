@@ -2,19 +2,15 @@
 name: sort-inbox
 description: Sort the conversations in our mailboxes by setting each one's importance (high/normal/low) and category tab (important/team/vip/news/social/other), so the inbox tabs fill. Changes only those two fields.
 tools:
-  - conversation_digest
-  - sort_threads
+  - judge_threads
 ---
 # Sort the inbox
 
-## Which conversations
-- Every conversation in our mailboxes, a page at a time.
-  1. Call `conversation_digest` with `limit: 6`.
-  2. Decide that page, save it with `sort_threads`.
-  3. Call again with `offset` = `next_offset` until it is null.
-- If the request names conversations (a subject word or the other side), pass that word as `search`.
+## How it runs
+- One `judge_threads` task with `skill: sort-inbox`: every conversation in our mailboxes is judged in parallel shards.
+  If the request names conversations (a subject word or the other side), pass that word as `search`.
+- Each item shows its current `importance` and `split_category`; decide both with the rules below.
 - A mailbox that is not ours → `refuse` with `not_our_mailbox`.
-- Each item shows its current `importance` and `split_category`.
 
 ## Importance
 - **high:** the other side is waiting on us **and** it involves a deadline, money (payment, price, order), a
@@ -30,14 +26,9 @@ tools:
 - **social:** invitations or greetings with no business content.
 - **other:** anything else.
 
-## What to write
-For each page, call `sort_threads` **once**, with one item (`thread_id`, `importance`, `split_category`) for every
-conversation on that page whose current values differ from what you decided.
-- Skip the ones already right. If none on a page differ, call `sort_threads` with an empty `items` list.
-- The next page can only be read once the current one is saved.
-- Change nothing else.
-
-When `next_offset` is null and the last page is done, answer. Do not read pages again.
+## What is written (by code)
+`importance` and `split_category`, only on conversations whose current values differ from the verdict. The ones
+already right are left alone. Nothing else changes.
 
 ## What to report
 - A short table: subject → importance, category, and a few words of why.

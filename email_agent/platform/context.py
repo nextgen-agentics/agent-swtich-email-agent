@@ -9,8 +9,8 @@ from email_agent.config import Settings
 from email_agent.contracts.agent import OurMailbox, RunContext
 from email_agent.contracts.platform import ListPage, Mailbox
 from email_agent.contracts.tool_args import TOOL_ARGS
-from email_agent.mcp_session import McpSession
-from email_agent.rest import RestClient
+from email_agent.platform.mcp_session import McpSession
+from email_agent.platform.rest import RestClient
 
 
 class ContextError(Exception):
@@ -29,7 +29,8 @@ def select_mailboxes(mailboxes: list[Mailbox], wanted: list[str] | None) -> list
 
 
 async def build_context(settings: Settings, mcp: McpSession, instance: str, request: str, run_id: str,
-                        today: date | None = None, mailboxes: list[str] | None = None) -> RunContext:
+                        today: date | None = None, mailboxes: list[str] | None = None,
+                        only_threads: list[str] | None = None) -> RunContext:
     """`mailboxes`: addresses to work in; None = the instance default (config.INSTANCES), else every mailbox."""
     rest = RestClient(settings, instance)
     me, locale = await asyncio.to_thread(lambda: (rest.me(), rest.display_locale()))
@@ -42,5 +43,6 @@ async def build_context(settings: Settings, mcp: McpSession, instance: str, requ
         raise ContextError("this login has no mailbox on this instance")
     working = select_mailboxes(owned, mailboxes if mailboxes is not None else settings.instance(instance).mailboxes)
     return RunContext(run_id=run_id, instance=instance, request=request, today=today or date.today(),
-                      me=me, locale=locale, mailboxes=[OurMailbox(id=m.id, email=m.email.lower()) for m in working],
-                      our_addresses=sorted(m.email.lower() for m in owned))
+                      me=me, locale=locale, mailboxes=[OurMailbox(id=m.id, email=(m.email or "").lower()) for m in working],
+                      our_addresses=sorted((m.email or "").lower() for m in owned), house_rules=settings.house_rules(instance),
+                      only_threads=only_threads)

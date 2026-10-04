@@ -39,8 +39,6 @@ class GroundTruth(BaseModel):
     def undecided(self) -> list[NeedsReplyCandidate]:
         return [c for c in self.needs_reply if c.needs_reply is None]
 
-    def expected_needs_reply(self) -> set[str]:
-        return {c.thread_id for c in self.needs_reply if c.needs_reply}
 
     def mailbox_of(self, c: NeedsReplyCandidate) -> str | None:
         """Files from before 2026-10-03 cover one mailbox and do not name it per item."""

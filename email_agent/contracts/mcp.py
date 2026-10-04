@@ -18,7 +18,7 @@ from typing import Any, Literal
 from mcp.types import CallToolResult
 from pydantic import BaseModel, Field
 
-PROTOCOL_VERSION = "2025-11-25"  # what AgentSwitch speaks (verified by scripts/mcp_sdk_spike.py)
+PROTOCOL_VERSION = "2025-11-25"  # what AgentSwitch speaks (verified by scripts/platform/mcp_sdk_spike.py)
 
 
 def tool_entity(name: str) -> str:
@@ -30,7 +30,7 @@ def tool_operation(name: str) -> str:
     return name.split(".", 1)[1] if "." in name else ""
 
 
-McpErrorKind = Literal["jsonrpc", "tool", "http", "auth", "transport", "validation"]
+McpErrorKind = Literal["jsonrpc", "tool", "http", "auth", "transport", "validation", "timeout"]
 
 
 class McpError(BaseModel):
@@ -40,6 +40,7 @@ class McpError(BaseModel):
                 "Invalid tool arguments."
     tool        the tool ran and reported failure (CallToolResult.is_error)
     validation  our own pydantic args model rejected the call before sending
+    timeout     no answer within mcp_call_timeout_s: for a write, it may or may not have happened
     auth/http/transport  connection-level problems
     """
 

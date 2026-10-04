@@ -24,8 +24,8 @@ from typing import Any, Callable
 import httpx2
 from pydantic import BaseModel
 from tenacity import (
-    retry_if_exception_type,
     Retrying,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )

@@ -1,8 +1,9 @@
-"""The model behind Perception and Decision. One interface: `await llm.chat(LlmRequest) -> LlmReply`.
+"""The models behind the graph's roles (goals, planner, judge, validator, critic, answer). One interface:
+`await llm.chat(LlmRequest) -> LlmReply`.
 
-GeminiClient uses google-genai directly: native function calling for Decision (the offered tools come from the
-goal's skill), and JSON output bound to a schema for Perception. OpenAICompatClient does the same over an
-OpenAI-compatible endpoint — W&B Inference by default.
+GeminiClient uses google-genai directly, with JSON output bound to the role's schema (`response_schema`).
+OpenAICompatClient does the same over an OpenAI-compatible endpoint — W&B Inference by default. (Function calling,
+which the old Decision step used, was removed after Stage 9: every graph role answers in schema-bound JSON.)
 
 `make_llm` returns a RoutedLlm: one ordered list of options (Revision 11). PROVIDER's options come first, then
 the other provider's: Gemini = GEMINI_MODEL on key 1, then keys 2–5 (failover only, never rotated for load);
@@ -27,10 +28,16 @@ import httpx
 import openai
 from google import genai
 from google.genai import errors, types
-from tenacity import AsyncRetrying, RetryCallState, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import (
+    AsyncRetrying,
+    RetryCallState,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from email_agent.config import Settings
-from email_agent.contracts.llm import LlmReply, LlmRequest, ToolCall, Usage
+from email_agent.contracts.llm import LlmReply, LlmRequest, Usage
 
 log = logging.getLogger(__name__)
 QUICK_TRIES = 2                       # server trouble: retried this often on the same option before switching
@@ -61,11 +68,6 @@ def _log_retry(state: RetryCallState) -> None:
                 QUICK_TRIES)
 
 
-def _safe(name: str) -> str:
-    """Tool names like `EmailThread.list` → `EmailThread__list` (function names stay simple)."""
-    return name.replace(".", "__")
-
-
 # ── the two clients (one model, one key each) ────────────────────────────────
 
 def _gemini_server_trouble(e: BaseException) -> bool:
@@ -80,16 +82,10 @@ class GeminiClient:
         self._client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=int(timeout_s * 1000)))
 
     def _config(self, req: LlmRequest) -> types.GenerateContentConfig:
-        tools = None
-        if req.tools:
-            tools = [types.Tool(function_declarations=[
-                types.FunctionDeclaration(name=_safe(t.name), description=t.description[:1000],
-                                          parameters_json_schema=t.parameters)
-                for t in req.tools])]
         return types.GenerateContentConfig(
             system_instruction=req.system,
             temperature=req.temperature,
-            tools=tools,
+            # no tools are offered, but the SDK's automatic function calling is on by default and warns on every call
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             response_mime_type="application/json" if req.response_schema else None,
             response_json_schema=req.response_schema,
@@ -99,7 +95,6 @@ class GeminiClient:
 
     async def chat(self, req: LlmRequest) -> LlmReply:
         contents = [types.Content(role=m.role, parts=[types.Part(text=m.text)]) for m in req.messages]
-        names = {_safe(t.name): t.name for t in req.tools}
         started = time.perf_counter()
         async for attempt in AsyncRetrying(stop=stop_after_attempt(QUICK_TRIES), wait=wait_exponential(1, max=4),
                                            before_sleep=_log_retry, retry=retry_if_exception(_gemini_server_trouble),
@@ -107,8 +102,6 @@ class GeminiClient:
             with attempt:                      # 429 is not retried here: the route moves to the next key instead
                 resp = await self._client.aio.models.generate_content(
                     model=self.model, contents=contents, config=self._config(req))
-        calls = [ToolCall(name=names.get(fc.name, fc.name), arguments=dict(fc.args or {}))
-                 for fc in (resp.function_calls or [])]
         text = ""
         if resp.candidates and resp.candidates[0].content and resp.candidates[0].content.parts:
             text = "".join(p.text for p in resp.candidates[0].content.parts if p.text and not p.thought)
@@ -116,7 +109,6 @@ class GeminiClient:
         return LlmReply(
             model=self.model,
             text=text.strip(),
-            tool_calls=calls,
             finish_reason=(getattr(resp.candidates[0].finish_reason, "value", None) if resp.candidates else None),
             usage=Usage(input_tokens=(meta.prompt_token_count or 0) if meta else 0,
                         output_tokens=(meta.candidates_token_count or 0) if meta else 0,
@@ -147,9 +139,6 @@ class OpenAICompatClient:
     def _kwargs(self, req: LlmRequest, max_tokens: int) -> dict[str, Any]:
         system = req.system
         kw: dict[str, Any] = {"model": self.model, "temperature": req.temperature, "max_tokens": max_tokens}
-        if req.tools:
-            kw["tools"] = [{"type": "function", "function": {"name": _safe(t.name), "description": t.description[:1000],
-                                                             "parameters": t.parameters}} for t in req.tools]
         if req.response_schema:
             if self._json_schema_ok:
                 kw["response_format"] = {"type": "json_schema", "json_schema": {
@@ -176,34 +165,24 @@ class OpenAICompatClient:
                     raise
 
     async def chat(self, req: LlmRequest) -> LlmReply:
-        names = {_safe(t.name): t.name for t in req.tools}
         started = time.perf_counter()
         resp = await self._create(req, self.max_tokens)
         choice = resp.choices[0]
-        # Cut off by the token limit with no tool call: the text (if any) is half an answer, never a whole one.
-        if choice.finish_reason == "length" and not choice.message.tool_calls:
+        # Cut off by the token limit: the text (if any) is half an answer, never a whole one.
+        if choice.finish_reason == "length":
             log.warning("⏳ %s ran out of its %d-token budget before finishing: retrying once with %d",
                         self.model, self.max_tokens, self.max_tokens * 2)
             resp = await self._create(req, self.max_tokens * 2)   # the thinking used up the budget: once more
             choice = resp.choices[0]
-            if choice.finish_reason == "length" and not choice.message.tool_calls:
+            if choice.finish_reason == "length":
                 raise BudgetExceeded(f"{self.model} used all {self.max_tokens * 2} tokens without finishing its "
                                      "reply; raise LLM_MAX_TOKENS in .env or choose another model")
         msg = choice.message
-        calls = []
-        for tc in msg.tool_calls or []:
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {"_unparsed_arguments": tc.function.arguments}   # Action's contract check reports it
-            calls.append(ToolCall(name=names.get(tc.function.name, tc.function.name),
-                                  arguments=args if isinstance(args, dict) else {"_unparsed_arguments": args}))
         u = resp.usage
         details = getattr(u, "completion_tokens_details", None) if u else None
         return LlmReply(
             model=self.model,
             text=(msg.content or "").strip(),
-            tool_calls=calls,
             finish_reason=choice.finish_reason,
             usage=Usage(input_tokens=(u.prompt_tokens or 0) if u else 0,
                         output_tokens=(u.completion_tokens or 0) if u else 0,
@@ -319,10 +298,13 @@ class Option:
         return f"{self.label}: ready"
 
 
-def plan_route(settings: Settings) -> list[tuple[str, str, int | None]]:
+Provider = Literal["gemini", "openai"]
+
+
+def plan_route(settings: Settings) -> list[tuple[Provider, str, int | None]]:
     """(provider, model, key slot) in priority order — no clients made, no network."""
     order = [settings.provider] + [p for p in ("gemini", "openai") if p != settings.provider]
-    planned: list[tuple[str, str, int | None]] = []
+    planned: list[tuple[Provider, str, int | None]] = []
     for provider in order:
         if provider == "gemini":
             slots = [slot for slot, _ in settings.gemini_keys()]
@@ -358,6 +340,14 @@ class RoutedLlm:
         # connection open without finishing can slip past them (two W&B calls hung for 50+ minutes, 2026-10-03).
         self.call_ceiling_s = call_ceiling_s
         self.model = options[0].model
+
+    def without_model(self, model: str | None) -> "RoutedLlm | None":
+        """The same route minus every option of `model` (the validator must not be the model it checks). The options
+        are shared, so health carries over. None when no other model is configured."""
+        rest = [o for o in self.options if o.model != model]
+        if not rest:
+            return None
+        return RoutedLlm(rest, self.wait_max_s, self.breaker_s, self.text, call_ceiling_s=self.call_ceiling_s)
 
     def _apply(self, opt: Option, f: Failure) -> None:
         now = time.monotonic()
@@ -428,10 +418,15 @@ def build_route(settings: Settings) -> RoutedLlm:
     shared_openai: openai.AsyncOpenAI | None = None
     options = []
     for provider, model, slot in plan_route(settings):
+        client: GeminiClient | OpenAICompatClient
         if provider == "gemini":
+            if slot is None:
+                raise ValueError(f"no Gemini key slot planned for {model}")
             client = GeminiClient(model, keys[slot].get_secret_value(), settings.gemini_thinking_level,
                                   settings.llm_timeout_s)
         else:
+            if settings.wandb_api_key is None:
+                raise ValueError(f"{model} is on the route but WANDB_API_KEY is not set")
             if shared_openai is None:
                 headers = {"OpenAI-Project": settings.wandb_project} if settings.wandb_project else {}
                 shared_openai = openai.AsyncOpenAI(api_key=settings.wandb_api_key.get_secret_value(),

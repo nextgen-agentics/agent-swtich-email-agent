@@ -1,6 +1,6 @@
 """Who wrote last, worked out from the messages themselves.
 
-Used by the agent's local tool `mailbox_overview` and by scripts/propose_ground_truth.py.
+Used by the agent's local tool `mailbox_overview` and by scripts/agent/propose_ground_truth.py.
 Plain code, no LLM: it reports facts; deciding whether a reply is needed is judgement.
 
 Two data realities it handles:
@@ -8,16 +8,35 @@ Two data realities it handles:
   added (BUG-005), so they are ignored.
 - The pre-loaded Suryodaya mail pairs every real message with a "mirror": the same text a day
   later from the other side. A mirror is not a reply, so it is marked and skipped
-  (WORKAROUND(BUG-022); scripts/check_brief_claims.py F15 reports it through `mirror_pairs`).
+  (WORKAROUND(BUG-022); scripts/platform/check_brief_claims.py F15 reports it through `mirror_pairs`).
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 
-from email_agent.contracts.agent import (ConversationDigest, ConversationOverview, DigestMessage, MessageView,
-                                         PriceConversation)
+from email_agent.contracts.agent import (
+    ConversationDigest,
+    ConversationOverview,
+    DigestMessage,
+    MessageView,
+    PriceConversation,
+)
 from email_agent.contracts.platform import EmailMessage, EmailThread
+
+FACTS_VERSION = 1      # bump when overview / digest / price_view change: the local mailbox copy then rebuilds its facts
+
+
+def content_hash(thread: EmailThread, messages: list[EmailMessage]) -> str:
+    """Changes whenever anything a judgement about the conversation could depend on changes: its subject, or any
+    message's id, sender, time, folder, status or text. Thread flags (star, summary, importance) are not included:
+    they are what the agent writes, not what it reads. Used as the key of the verdict cache (Revision 12)."""
+    parts = [thread.id, thread.subject or ""]
+    for m in sorted((m for m in messages if m.thread_id == thread.id), key=lambda m: m.id):
+        parts += [m.id, (m.from_email or "").lower(), m.received_at or m.sent_at or m.created_at or "", m.folder or "",
+                  m.status or "", (m.body_text or m.snippet or "").strip()]
+    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()[:32]
 
 
 def _norm(text: str) -> str:

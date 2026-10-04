@@ -5,7 +5,7 @@ writes.jsonl, final.json, outcome.json), so it works for any run — finished, c
 interrupted, or one killed so hard that no final.json was written. agent.run writes it at
 the end of every run; for older runs:
 
-    uv run python -m email_agent.run_report runs/<run_id> [runs/<run_id> …]
+    uv run python -m email_agent.record.run_report runs/<run_id> [runs/<run_id> …]
 """
 
 from __future__ import annotations
@@ -17,9 +17,24 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from email_agent.contracts.agent import FinalAnswer, RunContext, RunOutcome, RunRequest, WriteRecord
-from email_agent.contracts.runlog import (ActionStep, DecisionStep, ErrorStep, GoalsStep, LlmStep, MemoryStep,
-                                          RunSummary, StepLine)
+from email_agent.contracts.agent import (
+    FinalAnswer,
+    RunContext,
+    RunOutcome,
+    RunRequest,
+    WriteRecord,
+)
+from email_agent.contracts.runlog import (
+    ActionStep,
+    ErrorStep,
+    LlmStep,
+    NodeStep,
+    PlanStep,
+    RunSummary,
+    StepLine,
+    SyncStep,
+)
+from email_agent.graph.store import RUN_FILE, RunStore
 
 ANSWER_CHARS = 300
 
@@ -79,15 +94,8 @@ def _step_row(step: Any) -> tuple[str, str, str] | None:
         secs = f"{step.reply.elapsed_ms / 1000:.1f}s" if step.reply else "—"
         if not step.valid:
             return f"{step.layer} (LLM)", f"reply rejected, {secs}", _cell(step.error or "", 200)
-        return f"{step.layer} (LLM)", f"{secs} · {tokens}", _cell(step.error or "ok", 120)
-    if isinstance(step, GoalsStep):
-        goals = "; ".join(f"{g.id} → {g.skill or 'no skill'}{' ✓' if g.done else ''}" for g in step.goals)
-        return "goals", f"{len(step.goals)} goal(s)", _cell(goals)
-    if isinstance(step, DecisionStep):
-        if step.output.answer is not None:
-            return "decision", f"{step.goal_id}: answer", f"{len(step.output.answer)} characters"
-        call = step.output.tool_call
-        return "decision", f"{step.goal_id}: call `{call.name}`", _cell(call.arguments, 120)
+        layer = f"{step.layer} (LLM)" + (f" `{step.node_id}`" if step.node_id else "")
+        return layer, f"{secs} · {tokens}", _cell(step.error or "ok", 120)
     if isinstance(step, ActionStep):
         r = step.result
         if not r.ok:
@@ -103,8 +111,23 @@ def _step_row(step: Any) -> tuple[str, str, str] | None:
         return "action", f"`{r.tool}`", f"✓ {rows}{len(r.preview):,} characters{art}"
     if isinstance(step, ErrorStep):
         return "**error**", f"in {step.error.where}", f"✗ {step.error.type}: {_cell(step.error.message, 200)}"
-    if isinstance(step, MemoryStep):
-        return None
+    if isinstance(step, PlanStep):
+        what = f"round {step.iter} ← {step.trigger}"
+        if step.goals:
+            goals = "; ".join(f"{g.id} → {g.skill or f'no skill ({g.refusal})'}" for g in step.goals)
+            return "planner", what, _cell(f"goals: {goals}; added: {', '.join(step.added) or '—'}", 300)
+        rejected = f" · {len(step.rejected)} rejected: {_cell(step.rejected[-1], 120)}" if step.rejected else ""
+        return "planner", what, _cell(f"added: {', '.join(step.added) or '—'}{rejected}", 300)
+    if isinstance(step, NodeStep):
+        mark = {"succeeded": "✓", "failed": "✗", "waiting": "⏸", "fanned_out": "⇉", "cancelled": "–"}[step.state]
+        return "node", f"`{step.node_id}` [{step.capability}]", f"{mark} {_cell(step.summary, 160)} · {step.seconds:.1f}s"
+    if isinstance(step, SyncStep):
+        rep = step.report
+        changed = sum(t.changed for t in rep.tables)
+        how = "full" if any(t.full for t in rep.tables) else "incremental"
+        return "sync", f"local mailbox copy ({how})", (f"{rep.calls} calls · {rep.seconds:.1f}s · {changed} rows changed · "
+                                                      f"{rep.facts_recomputed} conversations re-worked · "
+                                                      f"{rep.threads_total} conversations / {rep.messages_total} messages")
     return None
 
 
@@ -134,13 +157,15 @@ def render(s: RunSummary) -> str:
                   "killed hard (kill -9, a closed laptop), or the run is older than crash handling (2026-10-03).",
                   "", f"Last step logged: {where}.", ""]
     else:
-        icon = {"done": "✅", "max_steps": "⚠️", "error": "⚠️", "crashed": "❌", "interrupted": "⏹"}[final.stopped]
+        icon = {"done": "✅", "max_steps": "⚠️", "error": "⚠️", "crashed": "❌", "interrupted": "⏹",
+                "waiting": "⏸"}.get(final.stopped, "⚠️")
         iters = f" after {out.iterations} iteration(s)" if out else ""
         lines += [f"{icon} **{final.stopped}**{iters}" + (f" — {final.reason}" if final.reason else ""), ""]
     if s.unreadable_lines:
         lines += [f"_{s.unreadable_lines} line(s) of steps.jsonl are in an older format and are left out below._", ""]
 
-    goals = final.goals if final else next((st.goals for st in reversed(s.steps) if isinstance(st, GoalsStep)), [])
+    goals = final.goals if final else next((st.goals for st in reversed(s.steps)
+                                            if isinstance(st, PlanStep) and st.goals), [])
     lines += ["## Goals", ""]
     if goals:
         lines += ["| goal | skill | done | answer |", "|---|---|---|---|"]
@@ -149,6 +174,8 @@ def render(s: RunSummary) -> str:
     else:
         lines.append("No goals were set.")
     lines.append("")
+
+    lines += _graph_section(Path(s.run_dir) if s.run_dir else None)
 
     lines += ["## Steps", "", "| step | layer | what | result |", "|---|---|---|---|"]
     for st in s.steps:
@@ -178,6 +205,88 @@ def render(s: RunSummary) -> str:
     if final and final.error and final.error.traceback:
         lines += ["## Error details", "", "```", final.error.traceback, "```", ""]
     return "\n".join(lines)
+
+
+def _graph_section(run_dir: Path | None) -> list[str]:
+    """The run's graph as a checklist (the running-task todo list, Revision 12), read from run.sqlite."""
+    if run_dir is None or not (run_dir / RUN_FILE).exists():
+        return []
+    path = run_dir / RUN_FILE
+    store = RunStore(path)
+    try:
+        snap = store.snapshot()
+        budgets = store.budgets()
+        events = store.events()
+        context = store.context()
+    finally:
+        store.close()
+    mark = {"succeeded": "[x]", "failed": "[!]", "cancelled": "[-]", "waiting": "[~]", "running": "[>]", "pending": "[ ]"}
+    lines = ["## Graph (the run's todo list)", ""]
+    for n in sorted(snap.nodes.values(), key=lambda n: (n.started_at is None, str(n.started_at), n.id)):
+        if n.capability == "judge_shard":
+            continue
+        shards = [x for x in snap.nodes.values() if x.capability == "judge_shard" and x.id.startswith(n.id + ".")]
+        extra = f" · {sum(x.state == 'succeeded' for x in shards)}/{len(shards)} shards" if shards else ""
+        err = f" — {_cell(n.error.message, 120)}" if n.error else ""
+        lines.append(f"- {mark.get(n.state, '[?]')} `{n.id}` {n.capability}"
+                     f"{f' ({n.goal_id})' if n.goal_id else ''}{extra}{err}")
+    if budgets:
+        lines += ["", "Budgets: " + ", ".join(f"{b.name} {b.spent:g}/{b.limit:g}" for b in budgets)]
+    lines += _memory_lines(context)
+    spans = run_dir / "spans.jsonl"
+    if spans.exists():
+        count = sum(1 for line in spans.read_text().splitlines() if line.strip())
+        try:
+            where = run_dir.resolve().relative_to(Path.cwd())
+        except ValueError:
+            where = run_dir
+        lines += ["", f"Trace: {count} spans in `spans.jsonl` (to send them to OpenTelemetry: "
+                      f"`uv run python -m email_agent.record.telemetry {where} --otlp`)"]
+    lines += _resume_lines(run_dir, snap, events)
+    return lines + [""]
+
+
+def _memory_lines(context: dict[str, Any]) -> list[str]:
+    """What the run's planner saw from memory (Stage 7): your house rules and the last runs on these mailboxes."""
+    rules = ((context.get("context") or {}).get("house_rules") or "").strip()
+    history = context.get("history") or []
+    if not rules and not history:
+        return []
+    lines = ["", "### Memory the planner saw", ""]
+    if rules:
+        lines.append(f"- house rules ({len(rules)} characters): {_cell(rules, 200)}")
+    lines += [f"- earlier run: {_cell(h, 260)}" for h in history]
+    return lines
+
+
+def _resume_lines(run_dir: Path, snap: Any, events: list[Any]) -> list[str]:
+    """Resumes, settled writes, reused replies, and what a waiting run needs from you (Stage 6)."""
+    lines = []
+    resumes = sum(e.kind == "run_resumed" for e in events)
+    reused = sum(e.kind == "llm_call_finished" and bool(e.payload.get("reused")) for e in events)
+    settled = [e.payload for e in events if e.kind == "write_reconciled"]
+    if resumes or reused or settled:
+        verdict = {True: "happened", False: "not sent (sent again)", None: "changed by someone else (not sent)"}
+        lines += ["", f"Resumed {resumes} time(s) · {reused} model reply(ies) reused instead of called again"]
+        lines += [f"- reconcile: {s.get('tool')} {s.get('row_id') or ''} → {verdict.get(s.get('happened'), '?')}"
+                  f"{' — ' + _cell(s.get('note'), 120) if s.get('note') else ''}" for s in settled]
+    for n in snap.nodes.values():
+        if n.state != "waiting" or n.wait is None:
+            continue
+        if n.wait.event_type == "approval.received":
+            writes = n.wait.metadata.get("writes") or []
+            lines += ["", f"### Waiting for your approval: `{n.id}` ({len(writes)} write(s))", ""]
+            lines += [f"- {_cell(w, 220)}" for w in writes[:60]]
+            if len(writes) > 60:
+                lines.append(f"- … and {len(writes) - 60} more")
+            lines += ["", f"Send them: `uv run python -m email_agent --resume {run_dir} --approve` · "
+                          f"write nothing: `… --reject`"]
+        else:
+            lines += ["", f"Waiting: `{n.id}` on {n.wait.event_type} — a write could not be settled against the live "
+                          f"platform; check the row, then `uv run python -m email_agent --resume {run_dir}`"]
+    if not snap.finished and not any(n.state == "waiting" for n in snap.nodes.values()):
+        lines += ["", f"Not finished. To continue: `uv run python -m email_agent --resume {run_dir}`"]
+    return lines
 
 
 def write_report(run_dir: Path) -> Path:

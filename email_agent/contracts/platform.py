@@ -7,9 +7,7 @@ The /api/schemas, /api/agent/tools and bug-report shapes are used only by script
 
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
-
-from typing import Annotated
+from typing import Annotated, Any, Generic, TypeVar
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
@@ -65,7 +63,7 @@ class RegimeLocale(BaseModel):
 #   "a@x,b@y"                              (Suryodaya seed, and anything written via MCP/REST create)
 #   ["a@x","b@y"]                          (Keystone rows)
 #   [{"email":"a@x","name":"A"}, …]        (rows written by the send path, e.g. endpoint.email.messages.send)
-# Temporary — remove once scripts/check_brief_claims.py shows BUG-001 fixed.
+# Temporary — remove once scripts/platform/check_brief_claims.py shows BUG-001 fixed.
 def _to_str_list(value: Any) -> list[str] | None:
     """Normalise every wire form seen for the same `text` field to a list of strings."""
     if value is None or value == "":
@@ -198,6 +196,7 @@ class AgentMemory(Row):
     session_id: str | None = None
     is_active: bool | None = None
     user_id: str | None = None
+    expires_at: str | None = None
 
 
 class AgentTodo(Row):
@@ -239,6 +238,12 @@ class AgentToolPolicy(Row):
 
 
 RowT = TypeVar("RowT", bound=Row)
+
+def list_page(row: type[RowT]) -> type[ListPage[RowT]]:
+    """`ListPage[<row model>]` for a row model chosen at run time. Pydantic builds it then; mypy cannot read a
+    variable as a type, hence the one ignore here instead of one at every caller."""
+    return ListPage[row]  # type: ignore[valid-type]
+
 
 # Entity → row model, for parsing tool results. Entities not listed parse as plain `Row` (extra="allow").
 ROW_MODELS: dict[str, type[Row]] = {

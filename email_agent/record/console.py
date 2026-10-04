@@ -21,13 +21,21 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.markup import escape
+from rich.status import Status
 
 from email_agent.contracts.agent import RunContext, RunOutcome, RunRequest
 from email_agent.contracts.llm import LlmReply, LlmRequest
-from email_agent.contracts.runlog import ActionStep, DecisionStep, ErrorStep, GoalsStep, LlmStep, MemoryStep
+from email_agent.contracts.runlog import (
+    ActionStep,
+    ErrorStep,
+    LlmStep,
+    NodeStep,
+    PlanStep,
+    SyncStep,
+)
 
 if TYPE_CHECKING:
-    from email_agent.llm import Llm
+    from email_agent.llm.route import Llm
 
 LAYER_WIDTH = 11
 
@@ -55,19 +63,16 @@ def _short(value: Any, limit: int = 40) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def _args(arguments: dict[str, Any], verbose: bool) -> str:
-    if verbose:
-        return json.dumps(arguments, ensure_ascii=False, default=str)
-    return ", ".join(f"{k}={_short(v)}" for k, v in arguments.items())
-
-
 class ConsoleView:
     def __init__(self, console: Console | None = None, verbose: bool = False, prefix: str = ""):
         self.console = console or Console(stderr=True, highlight=False)
         self.verbose = verbose
         self.prefix = prefix                      # the harness puts the task id here
-        self._llm: LlmStep | None = None          # the LLM call whose numbers go on the next decision/goals line
+        self._llm: LlmStep | None = None          # the LLM call whose numbers go on the next planner line
         self._mark = time.monotonic()             # when the last line was printed (action timing)
+        self._waits: dict[object, tuple[str, float]] = {}   # model calls in flight (label, start)
+        self._status: Status | None = None
+        self._ticker: asyncio.Task[None] | None = None
 
     # ── output ───────────────────────────────────────────────────────────────
     def _line(self, it: int | None, layer: str, text: str, style: str = "") -> None:
@@ -105,9 +110,13 @@ class ConsoleView:
                    f"{ctx.locale.country} / {ctx.locale.base_currency} · today {ctx.today.isoformat()} · "
                    f"{mailboxes} · {seat_tools} seat tools · skills: {', '.join(skills)}")
 
+    def note(self, layer: str, text: str, style: str = "") -> None:
+        """A line that is not a step (resume, reconcile, approvals)."""
+        self._line(None, layer, escape(text), style)
+
     def finish(self, outcome: RunOutcome, report: Path) -> None:
         f, u = outcome.final, outcome.usage
-        style = {"done": "green", "crashed": "red", "interrupted": "yellow"}.get(f.stopped, "yellow")
+        style = {"done": "green", "crashed": "red", "interrupted": "yellow", "waiting": "cyan"}.get(f.stopped, "yellow")
         writes = len(outcome.writes)
         dry = " (dry run)" if outcome.dry_run and writes else ""
         self.console.print(f"{escape(self.prefix)}[bold {style}]■ {f.stopped}[/bold {style}] · {outcome.iterations} "
@@ -124,28 +133,50 @@ class ConsoleView:
                 self._line(step.iter, step.layer, f"⚠ reply rejected: {escape(_short(step.error or '', 160))} — "
                            "asking again", "yellow")
                 return
+            if step.layer == "critic" and step.valid:        # the evidence critic and the verifier: a quiet line
+                if step.error:
+                    style = "yellow" if step.error.startswith("not ready") else "dim"
+                    self._line(step.iter, "critic", f"{escape(step.node_id or '')}: {escape(step.error)}", style)
+                return
+            if step.layer in ("judge", "answer", "validator"):  # the node line carries the outcome
+                if self.verbose and step.reply:
+                    u = step.reply.usage
+                    self._line(None, step.layer, f"[dim]{step.node_id}: {step.reply.elapsed_ms / 1000:.1f}s · "
+                               f"{_k(u.input_tokens)} in / {_k(u.output_tokens)} out[/dim]")
+                return
             self._llm = step
             if step.error:                                   # e.g. "model proposed 10 calls; the first is used"
                 self._line(step.iter, step.layer, f"⚠ {escape(step.error)}", "yellow")
-        elif isinstance(step, GoalsStep):
-            self._line(step.iter, "perception", f"{len(step.goals)} goal(s){self._llm_numbers()}")
-            for g in step.goals:
-                skill = f"⇒ {g.skill}" if g.skill else "⇒ [yellow]no skill fits (will refuse)[/yellow]"
-                done = " ✓" if g.done else ""
-                self._line(None, "", f"{g.id} \"{escape(_short(g.text, 90))}\" {skill}{done}")
-        elif isinstance(step, DecisionStep):
-            out = step.output
-            if out.answer is not None:
-                what = f"{step.goal_id} → [green]ANSWER[/green] ({len(out.answer):,} characters)"
-            else:
-                what = f"{step.goal_id} → {out.tool_call.name}({escape(_args(out.tool_call.arguments, self.verbose))})"
-            self._line(step.iter, "decision", what + self._llm_numbers())
         elif isinstance(step, ActionStep):
             self._action(step)
-        elif isinstance(step, MemoryStep) and self.verbose:
-            h = step.recorded
-            self._line(step.iter, "memory", f"[dim]+ [{h.goal_id}] {h.kind}{f' {h.tool}' if h.tool else ''}: "
-                       f"{escape(_short(h.text, 120))}[/dim]")
+        elif isinstance(step, PlanStep):
+            for g in step.goals:
+                skill = f"⇒ {g.skill}" if g.skill else f"⇒ [yellow]no skill ({g.refusal}): refused[/yellow]"
+                self._line(None, "goal", f"{g.id} \"{escape(_short(g.text, 90))}\" {skill}")
+            for r in step.rejected:
+                self._line(step.iter, "planner", f"⚠ proposal rejected: {escape(_short(r, 200))} — asking again",
+                           "yellow")
+            if step.added or step.cancelled:
+                what = "; ".join(escape(_short(a, 90)) for a in step.added)
+                self._line(step.iter, "planner", f"+ {what}" + (f" · cancel {step.cancelled}" if step.cancelled else "")
+                           + self._llm_numbers())
+            elif not step.goals:
+                self._line(step.iter, "planner", f"[dim]{escape(_short(step.reason or 'nothing new', 120))}[/dim]"
+                           + self._llm_numbers())
+        elif isinstance(step, NodeStep):
+            style = {"failed": "red", "waiting": "yellow"}.get(step.state, "")
+            mark = {"succeeded": "✓", "failed": "✗", "waiting": "⏸", "fanned_out": "⇉", "cancelled": "–"}[step.state]
+            self._line(None, "node", f"{mark} {escape(step.node_id)} {escape('[' + step.capability + ']')} {escape(_short(step.summary, 140))}"
+                       f"   [dim]{step.seconds:.1f}s[/dim]", style)
+        elif isinstance(step, SyncStep):
+            rep = step.report
+            how = "full" if any(x.full for x in rep.tables) else "incremental"
+            self._line(step.iter, "sync", f"local mailbox copy, {how}: {rep.calls} calls, {rep.seconds:.1f}s, "
+                       f"{sum(x.changed for x in rep.tables)} rows changed, {rep.facts_recomputed} re-worked "
+                       f"({rep.threads_total} conversations / {rep.messages_total} messages)"
+                       + (f", {rep.embedded} message(s) embedded" if rep.embedded is not None else ""))
+            if rep.search_note:
+                self._line(step.iter, "sync", f"⚠ {escape(rep.search_note)}", "yellow")
         elif isinstance(step, ErrorStep):
             e = step.error
             what = f": {escape(_short(e.message, 300))}" if e.message else ""
@@ -185,17 +216,36 @@ class ConsoleView:
         if not self.console.is_terminal:
             yield
             return
-        started = time.monotonic()
-        with self.console.status(f"{escape(self.prefix)}{label}… 0s") as status:
+        # Graph nodes call models in parallel, and the terminal can show only one live line: the first call opens
+        # it, later ones join it ("3 calls: judge, judge, planner"), the last one to finish closes it.
+        token = object()
+        self._waits[token] = (label, time.monotonic())
+        if len(self._waits) == 1:
+            self._status = self.console.status(self._wait_text())
+            self._status.__enter__()
+
             async def tick() -> None:
                 while True:
                     await asyncio.sleep(1)
-                    status.update(f"{escape(self.prefix)}{label}… {time.monotonic() - started:.0f}s")
-            ticker = asyncio.create_task(tick())
-            try:
-                yield
-            finally:
-                ticker.cancel()
+                    if self._status:
+                        self._status.update(self._wait_text())
+            self._ticker = asyncio.create_task(tick())
+        try:
+            yield
+        finally:
+            self._waits.pop(token, None)
+            if not self._waits and self._status:
+                if self._ticker is not None:
+                    self._ticker.cancel()
+                    self._ticker = None
+                self._status.__exit__(None, None, None)
+                self._status = None
+
+    def _wait_text(self) -> str:
+        items = list(self._waits.values())
+        oldest = min(t for _, t in items)
+        what = items[0][0] if len(items) == 1 else f"{len(items)} model calls ({', '.join(label.split(':')[0] for label, _ in items)})"
+        return f"{escape(self.prefix)}{what}… {time.monotonic() - oldest:.0f}s"
 
 
 class TimedLlm:

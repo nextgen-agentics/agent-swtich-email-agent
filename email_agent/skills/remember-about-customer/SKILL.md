@@ -5,33 +5,37 @@ tools:
   - Party.list
   - Party.get
   - EmailContact.list
-  - AgentMemory.list
-  - AgentMemory.create
+  - recall_memory
+  - remember_fact
 ---
 # Remember something about a party
 
 ## Find the party
-1. Search `Party.list` with `search` set to the name in the request (try the shortest distinctive word if the
-   full name finds nothing).
+1. Search `Party.list` with `search` set to the **full name** as the request writes it (e.g. "Cardinal Tillage
+   Works"). Only if that finds nothing, try the shortest distinctive word.
    - If the request gives an email address, `EmailContact.list` with `search` finds the contact; its `party_id`
      is the party.
 2. Exactly one match → use its `id`.
-3. Several matches → pick the one whose name matches best, and say which you chose.
+3. Several matches → pick the one whose `name` matches the request best (a company named in the request is the
+   company, not a person who works there), and say which you chose.
 4. **No match → `refuse` with `unknown_record`.** Never create a party.
 
 ## Remember
-1. Read what we already remember: `AgentMemory.list` with `party_id`. Searching memory by its text does not work.
-2. If an active memory already says the same thing, do not add it again. Say it is already remembered.
-3. Otherwise call `AgentMemory.create` with only:
-   `{"party_id": <id>, "category": <preference | instruction | fact | relationship>, "content": <the thing to
-   remember, in the person's words, one or two sentences>, "source": "manual", "is_active": true}`.
+1. Read what we already remember: `recall_memory` with the party's `party_id`. It returns only active memories
+   (switched-off and expired ones do not count).
+2. If a memory it returns already says the same thing (even in other words), do not add it again. Say it is
+   already remembered. Otherwise go on to step 3.
+3. Otherwise call `remember_fact` with `party_id`, `category` and `content` (the thing to remember, in the person's
+   words, one or two sentences). Add `source_message_id` only when the fact comes from an email, not from the request.
    - **preference:** how they like things done (e.g. which currency or format they want).
-   - **instruction:** what we must always or never do for them.
-   - **fact:** something true about them.
+   - **instruction:** what we must always or never do for them (e.g. a report, a deadline, a check they require).
+   - **fact:** something true about them that asks nothing of us (e.g. their GST number, where their plant is).
    - **relationship:** who is who.
+   Anything they **want, require or expect from us** is a preference or an instruction, never a fact.
+   `remember_fact` itself skips an exact repeat ("already_remembered": nothing written).
 
 ## If the request only asks what we remember
-List the active memories from `AgentMemory.list` and write nothing.
+Call `recall_memory` with the party's `party_id` and list what it returns. Write nothing.
 
 ## What to report
-The party, the category and the text remembered, or the memories found.
+The party, the category and the text remembered (or that it was already remembered), or the memories found.

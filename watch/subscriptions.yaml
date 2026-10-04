@@ -1,0 +1,14 @@
+# What the inbox watcher does when it sees a change (Revision 12, Stage 8; email_agent/watch/watcher.py).
+# Written by you: an event is untrusted data, so only this file decides what may run.
+#   event_types   new_inbound (a message from someone else) · thread_changed (a conversation changed)
+#   request       what the run is asked; code limits the run to the event's conversation, whatever this says
+#   live          false = dry run. It writes for real only when this is true AND the watcher is started with --live
+#   max_runs_per_day, max_llm_calls_per_day   ceilings per book per day (a refused run is recorded, never silent)
+subscriptions:
+  - id: reply-check
+    instances: [suryodaya, keystone]
+    event_types: [new_inbound]
+    request: "What needs my reply today?"
+    live: false
+    max_runs_per_day: 20
+    max_llm_calls_per_day: 300

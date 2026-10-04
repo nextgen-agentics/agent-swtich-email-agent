@@ -1,10 +1,8 @@
-"""Agent contracts: every hand-off inside the loop (S7 layout).
+"""Agent contracts: every hand-off inside a run (S7 layout).
 
     context → RunContext
-    perception (LLM) → PerceptionOutput → Observation(goals)
-    decision (LLM)   → DecisionOutput (answer xor ToolCall)
+    planner (LLM)    → Goal per thing asked (Revision 12; contracts/capabilities.py has its replies)
     action (no LLM)  → ActionResult (+ WriteRecord)
-    memory           → HistoryItem
     start of run     → RunRequest (written before any network call)
     end of run       → FinalAnswer, RunOutcome (+ RunError when the run crashed or was interrupted)
 
@@ -16,9 +14,9 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
-from email_agent.contracts.llm import ToolCall, Usage
+from email_agent.contracts.llm import Usage
 from email_agent.contracts.platform import Me, RegimeLocale
 
 Direction = Literal["us", "them"]
@@ -86,20 +84,6 @@ RefusalReason = Literal["out_of_seat", "not_our_mailbox", "not_permitted", "no_e
 # support an answer · unknown_record: a named RFQ, customer or conversation does not exist
 
 
-class RefuseInput(BaseModel):
-    """Arguments of the local tool `refuse`, offered with every skill: say no, with a reason, and change nothing."""
-
-    model_config = {"extra": "forbid"}
-
-    reason: RefusalReason = Field(description=(
-        "out_of_seat = needs data from another app or seat (e.g. salaries, invoices); not_our_mailbox = the request "
-        "is about a mailbox that is not one of ours; not_permitted = an action this agent must not take (send mail, "
-        "delete or change shared mail); no_evidence = the mail does not support an answer; unknown_record = a named "
-        "RFQ, quote, customer or conversation does not exist"))
-    explanation: str = Field(min_length=5, max_length=800, description=(
-        "One or two sentences for the person: what you checked, why you cannot answer or act, and who could help."))
-
-
 class PriceAgreementInput(BaseModel):
     """Arguments of the local tool `record_price_agreement`: one agreed price, saved as an AgentMemory fact."""
 
@@ -126,78 +110,6 @@ class PriceAgreementInput(BaseModel):
             raise ValueError(f"total {self.total} is not quantity × unit price ({expected:.2f}); copy the figures "
                              "from our quote line")
         return self
-
-
-class RecordPriceAgreementsInput(BaseModel):
-    """Arguments of the local tool `record_price_agreements`: every agreement found, in one call."""
-
-    model_config = {"extra": "forbid"}
-
-    items: list[PriceAgreementInput] = Field(min_length=1, max_length=50)
-
-
-class SummaryItem(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    thread_id: str
-    summary: str = Field(min_length=20, max_length=400,
-                         description="One or two plain sentences: who, what they want or what was decided, who owes "
-                                     "the next step and by when.")
-
-
-class SaveSummariesInput(BaseModel):
-    """Arguments of the local tool `save_summaries` (sets summary and summary_updated_at = today, nothing else)."""
-
-    model_config = {"extra": "forbid"}
-
-    items: list[SummaryItem] = Field(min_length=1, max_length=100)
-
-
-class SortItem(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    thread_id: str
-    importance: Literal["low", "normal", "high"]
-    split_category: Literal["important", "team", "vip", "news", "social", "other"]
-
-
-class SortThreadsInput(BaseModel):
-    """Arguments of the local tool `sort_threads` (sets importance and split_category, nothing else). An empty list
-    says "nothing on this page needs a change" — it closes the page so the next one can be read."""
-
-    model_config = {"extra": "forbid"}
-
-    items: list[SortItem] = Field(min_length=0, max_length=100)
-
-
-class FollowUpItem(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    thread_id: str
-    message_id: str = Field(description="Our last message in the conversation (our_last_message_id).")
-    remind_at: date = Field(description="The day to remind if they have not replied (YYYY-MM-DD), after today.")
-    note: str = Field(min_length=3, max_length=200, description="A few words: what we are waiting for.")
-
-
-class CreateFollowUpsInput(BaseModel):
-    """Arguments of the local tool `create_follow_ups` (one follow_up / no_reply EmailReminder per item)."""
-
-    model_config = {"extra": "forbid"}
-
-    items: list[FollowUpItem] = Field(min_length=1, max_length=100)
-
-
-class ConversationDigestInput(BaseModel):
-    """Arguments of the local tool `conversation_digest`: compact conversations, a page at a time."""
-
-    model_config = {"extra": "forbid"}
-
-    offset: int = Field(0, ge=0, description="Start here; use next_offset from the previous page.")
-    limit: int = Field(12, ge=1, le=25)
-    only_stale_summaries: bool = Field(False, description="Only conversations whose summary is missing or older "
-                                                          "than their newest message.")
-    search: str | None = Field(None, description="Only conversations whose subject, other side or text contains "
-                                                 "these words (case-insensitive).")
 
 
 class PriceOverviewInput(BaseModel):
@@ -288,6 +200,8 @@ class RunContext(BaseModel):
     locale: RegimeLocale
     mailboxes: list[OurMailbox]                 # the working set: what the agent reads and may change
     our_addresses: list[str] = Field(default_factory=list)   # every address our login owns: decides who "us" is
+    house_rules: str | None = None              # rules/<instance>.md, your standing instructions (memory layer 1)
+    only_threads: list[str] | None = None       # a run started by the watcher: only these conversations (Stage 8)
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
@@ -295,64 +209,16 @@ class RunContext(BaseModel):
         return {m.id for m in self.mailboxes}
 
 
-# ── perception ───────────────────────────────────────────────────────────────
-
-class GoalDelta(BaseModel):
-    """What the Perception LLM returns per goal. Goals are identified by position, as in S7."""
-
-    text: str = Field(min_length=3, max_length=240)
-    skill: str | None = Field(None, description="Name of the one skill that does this goal, or null if none fits.")
-    no_skill_reason: Literal["out_of_seat", "not_our_mailbox", "not_permitted"] | None = Field(
-        None, description="Only when skill is null: why no skill may do it.")
-    done: bool = False
-
-    @field_validator("skill")
-    @classmethod
-    def _known_skill(cls, v: str | None, info: ValidationInfo) -> str | None:
-        known = (info.context or {}).get("skills")
-        if v is not None and known is not None and v not in known:
-            raise ValueError(f"unknown skill {v!r}; choose one of {sorted(known)} or null")
-        return v
-
-
-class PerceptionOutput(BaseModel):
-    goals: list[GoalDelta] = Field(min_length=1, max_length=8)
-
+# ── goals ────────────────────────────────────────────────────────────────────
 
 class Goal(BaseModel):
     id: str
     text: str
     skill: str | None = None
     done: bool = False
-    answer: str | None = None          # Decision's answer for this goal, when done
+    answer: str | None = None          # the goal's answer (or the refusal's explanation), when done
     refused: bool = False              # the goal was declined: no skill fits, or the skill called `refuse`
     refusal: RefusalReason | None = None
-
-
-class Observation(BaseModel):
-    goals: list[Goal]
-
-    @property
-    def all_done(self) -> bool:
-        return bool(self.goals) and all(g.done for g in self.goals)
-
-    def next_unfinished(self) -> Goal | None:
-        return next((g for g in self.goals if not g.done), None)
-
-
-# ── decision ─────────────────────────────────────────────────────────────────
-
-class DecisionOutput(BaseModel):
-    """Exactly one of: the answer for the current goal, or one tool call."""
-
-    answer: str | None = None
-    tool_call: ToolCall | None = None
-
-    @model_validator(mode="after")
-    def _exactly_one(self) -> "DecisionOutput":
-        if (self.answer is None) == (self.tool_call is None):
-            raise ValueError("Decision must return exactly one of: an answer, or one tool call")
-        return self
 
 
 # ── action ───────────────────────────────────────────────────────────────────
@@ -369,6 +235,7 @@ class WriteRecord(BaseModel):
     fields: dict[str, Any]              # what we set
     before: dict[str, Any] = Field(default_factory=dict)   # those fields' values before the write
     dry_run: bool = False               # true = recorded only; the platform was not changed
+    key: str | None = None              # the write's outbox key (Revision 12): never sent twice on resume
     at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -383,19 +250,8 @@ class ActionResult(BaseModel):
     artifact_id: str | None = None
     write: WriteRecord | None = None
     writes: list[WriteRecord] = Field(default_factory=list)   # a batch tool's writes (one per row)
+    uncertain: list[str] = Field(default_factory=list)       # outbox keys of writes a crash left unsettled
     elapsed_ms: float = 0.0
-
-
-# ── memory ───────────────────────────────────────────────────────────────────
-
-class HistoryItem(BaseModel):
-    iter: int
-    goal_id: str
-    kind: Literal["answer", "action"]
-    tool: str | None = None
-    arguments: dict[str, Any] | None = None
-    ok: bool | None = None
-    text: str                           # the answer, or the action's preview / error
 
 
 # ── end of run ───────────────────────────────────────────────────────────────
@@ -413,15 +269,24 @@ class RunRequest(BaseModel):
     dry_run: bool = False
     today: date | None = None               # --as-of; None = the real date
     mailboxes: list[str] | None = None      # --mailbox; None = the instance default
+    full_sync: bool = False                 # --full-sync: re-read the whole mailbox into the local copy
+    cache: bool = False                     # reuse saved verdicts for unchanged conversations (CLI default; not harness)
+    approve_writes: bool = False            # --approve-writes: stop before any platform write until you say yes
+    history: bool = False                   # show the last runs on these mailboxes to the planner (CLI default; not
+                                            # harness: scores must measure the model, not what earlier runs did)
+    threads: list[str] | None = None        # only these conversations may be judged or written (the watcher's
+                                            # runs: code-enforced, whatever the request text says)
+    search: Literal["fts", "hybrid"] | None = None   # --search; None = the SEARCH setting (Stage 9)
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # The part of the run that was working when something went wrong.
-Where = Literal["connect", "context", "perception", "decision", "action", "finish"]
+Where = Literal["connect", "context", "graph", "reconcile", "finish"]
 
-Stopped = Literal["done", "max_steps", "error", "crashed", "interrupted"]
+Stopped = Literal["done", "max_steps", "error", "crashed", "interrupted", "waiting"]
 # done: every goal answered · max_steps: ran out of steps · error: the model's reply failed its contract twice
 # crashed: an exception (LLM, MCP, network …) · interrupted: Ctrl-C or the task was cancelled
+# waiting: paused for your approval of its writes (--approve-writes) or on a write it could not settle; resumable
 
 
 class RunError(BaseModel):

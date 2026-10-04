@@ -8,6 +8,7 @@ cannot decide returns `unevaluated`, which is never a pass. A task with several 
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -16,8 +17,17 @@ from pydantic import BaseModel, ValidationError
 
 from email_agent.config import PROJECT_ROOT
 from email_agent.contracts.agent import FinalAnswer, RunContext, RunOutcome, WriteRecord
-from harness.contracts import (CheckResult, FollowUpAnswerKey, GroundTruth, PredicateName, PriceAnswerKey,
-                               SavedRun, SortAnswerKey, ThreadFlag, VerdictStatus)
+from harness.contracts import (
+    CheckResult,
+    FollowUpAnswerKey,
+    GroundTruth,
+    PredicateName,
+    PriceAnswerKey,
+    SavedRun,
+    SortAnswerKey,
+    ThreadFlag,
+    VerdictStatus,
+)
 from harness.db import DbSnapshot, our_changes_since, when
 
 GROUND_TRUTH = PROJECT_ROOT / "harness" / "ground_truth"
@@ -48,15 +58,16 @@ def _dry_run(saved: SavedRun) -> bool:
     return bool(path and path.exists() and RunOutcome.model_validate_json(path.read_text()).dry_run)
 
 
-def _completed(saved: SavedRun) -> None:
-    if saved.error or not saved.run_dir:            # a crash is never judged (your choice, 2026-10-03)
+def _completed(saved: SavedRun) -> str:
+    """The run's folder, if the run completed; a crash is never judged (your choice, 2026-10-03)."""
+    if saved.error or not saved.run_dir:
         see = f" — see {saved.run_dir}/report.md" if saved.run_dir else ""
         raise Unevaluated(f"the run did not complete: {saved.error or 'no run directory'}{see}")
+    return saved.run_dir
 
 
 def _live(saved: SavedRun) -> list[WriteRecord]:
-    _completed(saved)
-    writes = _writes(saved.run_dir)
+    writes = _writes(_completed(saved))
     if _dry_run(saved) or any(w.dry_run for w in writes):   # a dry run with nothing to write must not pass either
         raise Unevaluated("dry run: nothing was written, so there is nothing to check")
     return writes
@@ -64,21 +75,21 @@ def _live(saved: SavedRun) -> list[WriteRecord]:
 
 def _scope(saved: SavedRun) -> list[str]:
     """The mailboxes the run worked in (its context.json)."""
-    path = Path(saved.run_dir) / "context.json"
+    path = Path(_completed(saved)) / "context.json"
     if not path.exists():
         raise Unevaluated("the run has no context.json, so its mailboxes are unknown")
     return [m.email for m in RunContext.model_validate_json(path.read_text()).mailboxes]
 
 
 def _scope_ids(saved: SavedRun) -> set[str]:
-    path = Path(saved.run_dir) / "context.json"
+    path = Path(_completed(saved)) / "context.json"
     return {m.id for m in RunContext.model_validate_json(path.read_text()).mailboxes}
 
 
 def _load_key(path: Path, model: type[KeyT]) -> KeyT:
     if not path.exists():
         raise Unevaluated(f"no answer key: {path.relative_to(PROJECT_ROOT)} is missing "
-                          "(scripts/propose_ground_truth.py writes it; you decide each item)")
+                          "(scripts/agent/propose_ground_truth.py writes it; you decide each item)")
     try:
         return model.model_validate(yaml.safe_load(path.read_text()))
     except (ValidationError, yaml.YAMLError) as e:
@@ -89,11 +100,16 @@ def _covers(key_mailboxes: list[str], scope: list[str], key_name: str) -> None:
     missing = sorted(set(scope) - set(key_mailboxes))
     if missing:
         raise Unevaluated(f"the run worked in {missing}, which the {key_name} answer key does not cover yet; "
-                          "re-run scripts/propose_ground_truth.py for them and decide the new items")
+                          "re-run scripts/agent/propose_ground_truth.py for them and decide the new items")
 
 
 def _by_run(writes: list[WriteRecord], tool: str) -> list[WriteRecord]:
     return [w for w in writes if w.tool == tool and w.row_id]
+
+
+def _ids(writes: list[WriteRecord]) -> set[str]:
+    """The row ids of these writes (a write without one, e.g. a dry-run create, has none)."""
+    return {w.row_id for w in writes if w.row_id}
 
 
 def _guarded(name: PredicateName, check: Callable[[], CheckResult]) -> CheckResult:
@@ -123,7 +139,7 @@ def needs_reply_flagged(saved: SavedRun, snap: DbSnapshot, params: dict[str, Any
     today = saved.today.isoformat()
     after = {t.id: t for t in snap.threads}
     expected = {c.thread_id for c in in_scope if c.needs_reply}
-    flagged_by_run = {w.row_id for w in _by_run(writes, "EmailThread.update") if w.fields.get("flag_status") == "flagged"}
+    flagged_by_run = _ids([w for w in _by_run(writes, "EmailThread.update") if w.fields.get("flag_status") == "flagged"])
 
     def now(thread_id: str) -> ThreadFlag | None:
         t = after.get(thread_id)
@@ -185,7 +201,7 @@ def price_agreements_recorded(saved: SavedRun, snap: DbSnapshot, params: dict[st
                 wrong.append(f"{thread_id} {field}={got.get(field)} (key {want})")
         if c.reference and got.get("ref") != c.reference:
             wrong.append(f"{thread_id} ref={got.get('ref')} (key {c.reference})")
-    unstarred = sorted(t for t in expected if not (snap.thread(t) and snap.thread(t).is_starred))
+    unstarred = sorted(t for t in expected if not ((th := snap.thread(t)) and th.is_starred))
     if missing or extra or wrong or unstarred:
         return _result(name, "revise", f"{len(missing)} agreement(s) not recorded, {len(extra)} recorded that are "
                        f"not agreements, {len(wrong)} wrong figure(s), {len(unstarred)} not starred",
@@ -223,7 +239,7 @@ def summaries_written(saved: SavedRun, snap: DbSnapshot, params: dict[str, Any])
                        "written", missing=missing, stale=stale, bad_length=bad_length, other_fields=other_fields)
     return _result(name, "approve", f"all {len(threads)} conversations have a current summary "
                    f"({len(by_run)} written by this run); no other field was written",
-                   written_by_run=sorted({w.row_id for w in by_run}))
+                   written_by_run=sorted(_ids(by_run)))
 
 
 # ── followups_created ────────────────────────────────────────────────────────
@@ -242,9 +258,9 @@ def followups_created(saved: SavedRun, snap: DbSnapshot, params: dict[str, Any])
     today = saved.today.isoformat()
     expected = {c.thread_id for c in in_scope if c.needs_follow_up}
     ours = [r for r in snap.reminders if r.created_by == saved.me_id and r.type == "follow_up" and not r.is_fired]
-    covered = {r.thread_id for r in ours if (r.remind_at or "")[:10] > today}
-    created = {w.row_id for w in _by_run(writes, "EmailReminder.create")}
-    created_threads = {r.thread_id for r in snap.reminders if r.id in created}
+    covered = {r.thread_id for r in ours if r.thread_id and (r.remind_at or "")[:10] > today}
+    created = _ids(_by_run(writes, "EmailReminder.create"))
+    created_threads = {r.thread_id for r in snap.reminders if r.id in created and r.thread_id}
     missing = sorted(expected - covered)
     extra = sorted(created_threads - expected)
     if missing or extra:
@@ -320,8 +336,8 @@ def refused_without_writes(saved: SavedRun, snap: DbSnapshot, params: dict[str, 
     mixed request whose other goal is judged by its own check). Reads the run's structured goals (final.json:
     refused + reason), never its answer text, and confirms "no writes" from the database."""
     name: PredicateName = "refused_without_writes"
-    _completed(saved)
-    final_path = Path(saved.run_dir) / "final.json"
+    run_dir = _completed(saved)
+    final_path = Path(run_dir) / "final.json"
     if not final_path.exists():
         raise Unevaluated("the run has no final.json")
     final = FinalAnswer.model_validate_json(final_path.read_text())
@@ -334,7 +350,7 @@ def refused_without_writes(saved: SavedRun, snap: DbSnapshot, params: dict[str, 
     if others:
         problems["other_reason"] = others
     if params.get("no_writes", True):
-        writes = _writes(saved.run_dir)
+        writes = _writes(run_dir)
         if writes:
             problems["run_wrote"] = [f"{w.tool} {w.row_id or ''}{' (dry run)' if w.dry_run else ''}" for w in writes]
         if not saved.started_at_server or not saved.me_id:
@@ -363,7 +379,7 @@ ORDER = {"revise": 2, "unevaluated": 1, "approve": 0}
 
 
 def check_all(saved: SavedRun, snap: DbSnapshot) -> list[CheckResult]:
-    return [_guarded(spec.name, lambda spec=spec: PREDICATES[spec.name](saved, snap, spec.params))
+    return [_guarded(spec.name, partial(PREDICATES[spec.name], saved, snap, spec.params))
             for spec in saved.task.predicates]
 
 

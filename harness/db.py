@@ -8,16 +8,26 @@ created or changed after a moment on the server's clock (the platform stores UTC
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 from pydantic import BaseModel, Field
 
 from email_agent.config import Settings
-from email_agent.contracts.platform import (AgentMemory, AgentTodo, EmailLabel, EmailMessage, EmailReminder, EmailThread,
-                                            ListPage, Party, Row)
-from email_agent.mcp_session import McpSession
-from email_agent.rest import RestClient
+from email_agent.contracts.platform import (
+    AgentMemory,
+    AgentTodo,
+    EmailLabel,
+    EmailMessage,
+    EmailReminder,
+    EmailThread,
+    Party,
+    Row,
+    list_page,
+)
+from email_agent.platform.mcp_session import McpSession
+from email_agent.platform.rest import RestClient
 from harness.contracts import ThreadFlag
 
 CLOCK_MARGIN = timedelta(seconds=2)
@@ -44,16 +54,18 @@ class DbSnapshot(BaseModel):
         times = [m.received_at or m.sent_at or m.created_at for m in self.messages if m.thread_id == thread_id]
         return max((x for x in times if x), default=None)
 
-    def rows(self, entity: str) -> list[Row]:
-        return {"EmailThread": self.threads, "EmailMessage": self.messages, "EmailReminder": self.reminders,
-                "AgentMemory": self.memories, "AgentTodo": self.todos, "EmailLabel": self.labels}[entity]
+    def rows(self, entity: str) -> Sequence[Row]:
+        tables: dict[str, Sequence[Row]] = {
+            "EmailThread": self.threads, "EmailMessage": self.messages, "EmailReminder": self.reminders,
+            "AgentMemory": self.memories, "AgentTodo": self.todos, "EmailLabel": self.labels}
+        return tables[entity]
 
 
 async def _list(mcp: McpSession, tool: str, model: type[Row]) -> list:
     out = await mcp.call(tool, {"limit": LIMIT})
     if not out.ok:
         raise RuntimeError(f"{tool} failed: {out.error.message if out.error else out.text}")
-    return ListPage[model].model_validate(out.data()).data
+    return list_page(model).model_validate(out.data()).data
 
 
 async def snapshot(settings: Settings, instance: str) -> DbSnapshot:

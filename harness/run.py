@@ -21,11 +21,11 @@ import yaml
 from rich.console import Console
 
 from email_agent.agent import run as run_agent
+from email_agent.common.errors import describe
 from email_agent.config import INSTANCES, PROJECT_ROOT, get_settings, with_model
-from email_agent.llm import plan_route, route_text
-from email_agent.console import ConsoleView, setup_logging
-from email_agent.errors import describe
-from email_agent.jsonio import dump_json
+from email_agent.llm.route import plan_route, route_text
+from email_agent.record.console import ConsoleView, setup_logging
+from email_agent.record.jsonio import dump_json
 from harness.contracts import SavedRun, TaskFile
 from harness.db import server_clock_and_me, thread_flags
 

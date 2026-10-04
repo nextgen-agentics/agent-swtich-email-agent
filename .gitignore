@@ -12,6 +12,7 @@ __pycache__/
 # run output (large, regenerated)
 runs/
 harness_runs/
+state/
 data/raw/
 
 # os / misc
