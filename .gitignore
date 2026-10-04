@@ -1,0 +1,22 @@
+# secrets — never commit
+.env
+others.txt
+curl_commands.sh
+
+# python / tooling
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# run output (large, regenerated)
+runs/
+harness_runs/
+data/raw/
+
+# os / misc
+.DS_Store
+reference/**/*.db
+reference/**/logs/
+.cache/
+reference/
