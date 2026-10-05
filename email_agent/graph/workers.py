@@ -57,7 +57,7 @@ from email_agent.graph.capabilities import (
 )
 from email_agent.graph.flows import FLOWS, SHARD_SIZE, VERDICTS, Flow, ScopedMailbox
 from email_agent.graph.outbox import RECONCILE
-from email_agent.graph.store import RunStore
+from email_agent.graph.store import BudgetExceeded, RunStore
 from email_agent.llm.route import Llm
 from email_agent.mailbox.search import select_candidates
 from email_agent.mailbox.store import MailboxStore
@@ -73,8 +73,9 @@ CRITIC_SYSTEM = (PROMPTS / "critic.md").read_text()
 VERIFIER_SYSTEM = (PROMPTS / "verifier.md").read_text()
 EVIDENCE_CHARS = 12_000          # per node, in the answer prompt
 CRITIC_OVERRULE_AFTER = 2        # S17: the same gap reported again means the fact is unavailable — let the goal end
-VALIDATE_MAX = 40                # write-causing verdicts re-judged per fan-out
-VALIDATE_SAMPLE = 5              # plus this many of the others, to spot misses
+VALIDATE_SAMPLE = 5              # besides every write-causing verdict, this many of the others, to spot misses
+ROOM_NODES = 4                   # kept free when a fan-out is sized: join, check, write, answer
+ROOM_CALLS = 4                   # … and model calls: the planner round after the write, critic, answer, verifier
 # Found by the Stage 6 drill: without it the critic read "dry_run: true" as "not written yet", and the planner re-added
 # the same writes as separate tasks.
 DRY_RUN_NOTE = ("DRY RUN: writes are recorded, not sent to the platform. A write step whose result says dry_run: true "
@@ -267,7 +268,7 @@ class GraphRuntime:
             ids = self._flow(args.skill).select(args)    # a watcher run's flow sees only its conversation(s)
         else:                                            # the candidates replace the word filter
             ids = self._flow(args.skill, hybrid[0]).select(args.model_copy(update={"search": None}))
-        total = len(self.mirror.overviews([m.id for m in self.ctx.mailboxes]))
+        total = self.mirror.conversation_count([m.id for m in self.ctx.mailboxes])
         if self.ctx.only_threads is not None:        # say so, or the answer counts the whole mailbox as checked
             total = len(self.ctx.only_threads)
         if not ids:          # a finished outcome with its write result (0), so the critic can see nothing was due
@@ -279,6 +280,12 @@ class GraphRuntime:
                                "needed writing: this is the goal's final write result",
                     **(hybrid[1] if hybrid else {})}
         chunks = [ids[i:i + SHARD_SIZE] for i in range(0, len(ids), SHARD_SIZE)]
+        fit = self._shards_that_fit()
+        if fit < 1:
+            raise NodeFailed(f"{len(ids)} conversation(s) to judge, but this run's budget has no room left for any "
+                             "judging call: answer with what is known, or ask the person to narrow the request")
+        not_judged = sum(len(c) for c in chunks[fit:])
+        chunks = chunks[:fit]                         # the newest first: selection lists the newest real message first
         shards = [TaskSpec(id=f"{task.id}.s{n:03d}", capability="judge_shard", goal_id=task.goal_id,
                            input={"skill": args.skill, "thread_ids": chunk}, wakes_planner=False,
                            timeout_s=SHARD_TIMEOUT_S) for n, chunk in enumerate(chunks, start=1)]
@@ -289,7 +296,11 @@ class GraphRuntime:
                          input={"join": join.id, "shards": [s.id for s in shards]})
         write = TaskSpec(id=f"{task.id}.write", capability="apply_writes", goal_id=task.goal_id,
                          input={"join": join.id, "check": check.id}, timeout_s=WRITES_TIMEOUT_S)
-        return FanOut(result={"skill": args.skill, "candidates": len(ids), "shards": len(shards),
+        left_out = {"not_judged": not_judged,
+                    "note": f"{not_judged} older conversation(s) were not judged: this run's budget fits {fit} group(s) "
+                            f"of {SHARD_SIZE}. Say so in the answer; the person can ask again with a narrower search "
+                            "(a party, a subject word) for the rest."} if not_judged else {}
+        return FanOut(result={"skill": args.skill, "candidates": len(ids), "shards": len(shards), **left_out,
                               **(hybrid[1] if hybrid else {}),
                               "conversations_in_mailboxes": total,
                               **({"limited_to": "the conversation(s) of the event that started this run"}
@@ -299,6 +310,21 @@ class GraphRuntime:
                                                                                     (check.id, write.id)],
                                        reason=f"{args.skill}: {len(ids)} candidates in {len(shards)} shard(s)",
                                        metadata={"final": write.id}))
+
+    def _room(self, name: str) -> float:
+        try:
+            b = self.store.budget(name)
+        except KeyError:
+            return float("inf")
+        return b.limit - b.spent
+
+    def _shards_that_fit(self) -> int:
+        """How many judging shards this run can still pay for (Revision 17: a 10,000-conversation sort fanned out 500
+        shards, used up the budgets at shard ~78 and ended with every goal open). With the second model on, each shard's
+        verdicts may need one more call to be checked."""
+        per_shard = 2 if self.validate and self.route is not None else 1
+        room = min(self._room("nodes") - ROOM_NODES, (self._room("llm_calls") - ROOM_CALLS) // per_shard)
+        return int(min(room, 10**6))
 
     async def _judge(self, flow: Flow, ids: list[str], goal_id: str | None, node_id: str, llm: Llm,
                      layer: str) -> tuple[list[Verdict], str | None]:
@@ -389,7 +415,7 @@ class GraphRuntime:
             unique.append(w)
         plan.writes = unique
         about = {o.thread_id: {"subject": o.subject, "counterpart": o.counterpart}
-                 for _, o in self.mirror.overviews([m.id for m in self.ctx.mailboxes])}
+                 for _, o in self.mirror.overviews([m.id for m in self.ctx.mailboxes], ids=seen)}
         return JoinResult(skill=args.skill, candidates=len(seen), counts=flow.counts(verdicts),
                           writes_planned=len(plan.writes), problems=problems + plan.problems,
                           verdicts=[about.get(v.thread_id, {}) | v.model_dump(mode="json", exclude_none=True)
@@ -414,7 +440,7 @@ class GraphRuntime:
         llm = self.llm.sharing(other) if isinstance(self.llm, LimitedLlm) else other
         verdicts = {v["thread_id"]: model.model_validate({k: v[k] for k in v if k not in ("subject", "counterpart")})
                     for v in join.verdicts}
-        positives = sorted(t for t, v in verdicts.items() if flow.positive(v))[:VALIDATE_MAX]
+        positives = sorted(t for t, v in verdicts.items() if flow.positive(v))      # every one: none goes out unchecked
         others = sorted((t for t in verdicts if t not in positives),
                         key=lambda t: _hash(self.ctx.run_id + t))[:VALIDATE_SAMPLE]
         ids = positives + others
@@ -422,14 +448,21 @@ class GraphRuntime:
             return report.model_copy(update={"skipped": "nothing to check"})
         second: dict[str, Verdict] = {}
         validator_model = None
+        unchecked: list[str] = []
         for i in range(0, len(ids), 20):
-            got, validator_model = await self._judge(flow, ids[i:i + 20], task.goal_id, task.id, llm, "validator")
+            try:
+                got, validator_model = await self._judge(flow, ids[i:i + 20], task.goal_id, task.id, llm, "validator")
+            except BudgetExceeded:
+                unchecked = [t for t in ids[i:] if t in positives]   # held, never written without the second look
+                break
             second.update({v.thread_id: v for v in got})
         subjects = {v["thread_id"]: v.get("subject") for v in join.verdicts}
         held: list[HeldVerdict] = []
         misses: list[HeldVerdict] = []
         agreed = 0
         for t in ids:
+            if t not in second:
+                continue
             a, b = verdicts[t], second[t]
             if flow.agree(a, b):
                 agreed += 1
@@ -437,6 +470,9 @@ class GraphRuntime:
             item = HeldVerdict(thread_id=t, subject=subjects.get(t), judge=a.model_dump(mode="json", exclude_none=True),
                                validator=b.model_dump(mode="json", exclude_none=True))
             (held if t in positives else misses).append(item)
+        held += [HeldVerdict(thread_id=t, subject=subjects.get(t), judge=verdicts[t].model_dump(mode="json", exclude_none=True),
+                             validator={"not_checked": "the model-call budget ran out before the second model saw it"})
+                 for t in unchecked]
         held_ids = {h.thread_id for h in held}
         plan = join.plan.model_copy(update={"writes": [w for w in join.plan.writes if w.thread_id not in held_ids]})
         self.store.record_event("validator_checked", task.id, {

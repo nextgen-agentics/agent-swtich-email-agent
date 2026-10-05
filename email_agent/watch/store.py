@@ -103,6 +103,14 @@ class EventStore:
             self._add(day, subscription_id, kind, 1)
         return True, used
 
+    def reserve_up_to(self, day: str, subscription_id: str, kind: str, want: int, limit: int) -> int:
+        """Claim up to `want` of what is left under `limit` (atomically); returns how much was claimed."""
+        with transaction(self.con):
+            granted = max(0, min(want, limit - self.window(day, subscription_id, kind)))
+            if granted:
+                self._add(day, subscription_id, kind, granted)
+        return granted
+
     def record(self, day: str, subscription_id: str, kind: str, amount: int) -> None:
         with transaction(self.con):
             self._add(day, subscription_id, kind, amount)

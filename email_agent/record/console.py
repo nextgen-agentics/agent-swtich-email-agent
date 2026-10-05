@@ -114,7 +114,7 @@ class ConsoleView:
         """A line that is not a step (resume, reconcile, approvals)."""
         self._line(None, layer, escape(text), style)
 
-    def finish(self, outcome: RunOutcome, report: Path) -> None:
+    def finish(self, outcome: RunOutcome, report: Path, page: Path | None = None) -> None:
         f, u = outcome.final, outcome.usage
         style = {"done": "green", "crashed": "red", "interrupted": "yellow", "waiting": "cyan"}.get(f.stopped, "yellow")
         writes = len(outcome.writes)
@@ -125,6 +125,8 @@ class ConsoleView:
         if len(outcome.served_by) > 1 or any("key #" in k and not k.endswith("#1") for k in outcome.served_by):
             served = ", ".join(f"{escape(k)} ×{n}" for k, n in outcome.served_by.items())
             self.console.print(f"{escape(self.prefix)}     [dim]served by: {served}[/dim]", soft_wrap=True)
+        if page is not None:
+            self.console.print(f"{escape(self.prefix)}     page: {escape(page.resolve().as_uri())}", soft_wrap=True)
 
     # ── one step ─────────────────────────────────────────────────────────────
     def step(self, step: Any) -> None:

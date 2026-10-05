@@ -16,6 +16,7 @@ HttpExchange (secrets masked) for evidence.
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,6 +79,7 @@ class RestClient:
         self.recorder = recorder
         self._http = httpx2.Client(base_url=self.instance.base_url, timeout=settings.http_timeout_s)
         self._token: str | None = None
+        self._login_lock = threading.Lock()
 
     # ── token cache, namespaced per team + instance (Session-20 §3) ──────────
     @property
@@ -103,6 +105,19 @@ class RestClient:
     # ── one request: retry transient failures, record evidence ───────────────
     def request(self, method: str, path: str, *, json_body: Any = None,
                 params: dict[str, Any] | None = None, auth: bool = True) -> httpx2.Response:
+        """One call; on 401 (the token expired during a long run) log in again once and repeat it. Threads share the
+        client, so only the first to see the stale token logs in."""
+        stale = self._token
+        resp = self._send(method, path, json_body=json_body, params=params, auth=auth)
+        if auth and resp.status_code == 401:
+            with self._login_lock:
+                if self._token == stale:
+                    self.login(force=True)
+            resp = self._send(method, path, json_body=json_body, params=params, auth=auth)
+        return resp
+
+    def _send(self, method: str, path: str, *, json_body: Any, params: dict[str, Any] | None,
+              auth: bool) -> httpx2.Response:
         headers = {"Authorization": f"Bearer {self.token}"} if auth else {}
 
         def attempt() -> httpx2.Response:
@@ -166,12 +181,8 @@ class RestClient:
         return self.login(force=True)
 
     def get(self, path: str, params: dict[str, Any] | None = None) -> httpx2.Response:
-        """Authenticated GET; logs in again once on 401 (expired cached token)."""
-        resp = self.request("GET", path, params=params)
-        if resp.status_code == 401:
-            self.login(force=True)
-            resp = self.request("GET", path, params=params)
-        return resp
+        """Authenticated GET (an expired token is renewed by `request`)."""
+        return self.request("GET", path, params=params)
 
     # ── typed reads ──────────────────────────────────────────────────────────
     def me(self) -> Me:

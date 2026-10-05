@@ -71,6 +71,7 @@ from email_agent.platform.writes import WritePath
 from email_agent.record.artifacts import Artifacts
 from email_agent.record.console import ConsoleView, TimedLlm
 from email_agent.record.run_report import write_report
+from email_agent.record.run_view import page_at_run_end
 from email_agent.record.runlog import RunLog
 from email_agent.record.telemetry import at_run_end
 from email_agent.watch.store import EventStore
@@ -305,6 +306,8 @@ async def _graph(req: RunRequest, settings: Settings, llm: Llm | None, log: RunL
                 why = (last.payload.get("reason") if last else None) or "the planner stopped without finishing"
                 p.stopped, p.reason = "error", f"Stopped before every goal ended: {why}"
         finally:
+            if "action" in locals():
+                await action.settle()
             store.close()
             mirror.close()
             memory.close()
@@ -407,6 +410,7 @@ def _finish(log: RunLog, req: RunRequest, p: _Progress, view: ConsoleView | None
     if (log.dir / RUN_FILE).exists():
         at_run_end(log.dir)                       # spans.jsonl (+ OTLP when configured): Stage 10, never raises
     report = write_report(log.dir)
+    page = page_at_run_end(log.dir)               # view.html, the run's web page (Revision 15), never raises
     if view:
-        view.finish(outcome, report)
+        view.finish(outcome, report, page)
     return outcome

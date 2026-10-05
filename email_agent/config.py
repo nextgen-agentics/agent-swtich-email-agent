@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     # order from the bake-off 2026-10-03 (docs/project/plan.md, Revision 11): DeepSeek 5/5 right, GLM 4/5, Qwen 2/4
     wandb_models: str = "deepseek-ai/DeepSeek-V4.1-Flash,zai-org/GLM-5.3-Flash,Qwen/Qwen3-30B-A3B-Instruct-2507"
     openai_base_url: str = "https://api.inference.wandb.ai/v1"
+    # Reasoning on W&B models (Revision 17). Off = faster replies and fewer tokens: sent as
+    # chat_template_kwargs.enable_thinking=false, which DeepSeek-V4.1-Flash honours; GLM-5.3-Flash always reasons and
+    # Qwen3-30B-A3B-Instruct never does (W&B / CoreWeave reasoning docs, 2026-10). A model that refuses the flag is
+    # asked again without it.
+    wandb_thinking: bool = False
     llm_max_tokens: int = 16000  # reasoning models spend part of this before answering; GLM-5.3-Flash used 8–16k
                                  # thinking on 8-item batches (2026-10-03), so 8000 was too small
     fallback: bool = True              # false = only the first option (comparisons, bake-offs)

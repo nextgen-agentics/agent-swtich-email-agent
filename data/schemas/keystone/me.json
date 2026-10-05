@@ -1,0 +1,26 @@
+{
+  "id": "5f20d322-6683-4b47-aa14-19bd8b6bd3b4",
+  "email": "team10@theschoolofai.in",
+  "name": "Team 10",
+  "role": "user",
+  "roles": [
+    "user",
+    "agent_user",
+    "sales_viewer"
+  ],
+  "allowed_apps": [
+    "email",
+    "agent",
+    "crm"
+  ],
+  "company_id": "c1e47d8d-b849-4187-9a32-4103d3dece4a",
+  "party_id": null,
+  "employee_id": null,
+  "department_id": null,
+  "team": "",
+  "avatar_url": null,
+  "is_active": 1,
+  "last_login": "2026-10-03T13:51:26.551043",
+  "created_at": "2026-09-04T09:44:00.771966",
+  "needs_recovery_enrollment": true
+}

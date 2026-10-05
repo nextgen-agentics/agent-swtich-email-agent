@@ -7,7 +7,8 @@ rows). Tables:
   thread_facts         per conversation, what `conversation.py` works out from its messages (overview, digest, price
                        view, content hash), rebuilt only when the conversation changes — so selecting candidates is SQL
   thread_text          FTS5 full-text index (trigram tokenizer = substring matching, like the old word search), one row
-                       per conversation: subject, senders and every message's text
+                       per conversation: subject, senders and every message's text; `text_rows` maps a conversation
+                       to its row number
   sync_state           per (table, mailbox): the newest `updated_at` seen (the watermark) and the last full pass
 
 Writes made by a run are copied in right after the platform accepts them (`apply_thread_update`), so later reads in the
@@ -60,7 +61,15 @@ SCHEMA = [
         PRIMARY KEY (entity, mailbox_id))
     """,
     VECTORS_SQL,                      # Stage 9: one vector per message (search.MailSearch)
+    # Revision 17: the full-text row of each conversation by number. `thread_id` cannot be indexed in an FTS5 table,
+    # so deleting by it scanned the whole table once per conversation: rebuilding 2,000 conversations took 0.6 s,
+    # 10,000 far longer.
+    """
+    CREATE TABLE text_rows (thread_id TEXT PRIMARY KEY, rid INTEGER NOT NULL);
+    INSERT OR REPLACE INTO text_rows (thread_id, rid) SELECT thread_id, rowid FROM thread_text
+    """,
 ]
+FACTS_CHUNK = 200                     # conversations per transaction when facts are rebuilt (another run can write between)
 
 
 def _row_json(row: EmailThread | EmailMessage) -> str:
@@ -70,6 +79,16 @@ def _row_json(row: EmailThread | EmailMessage) -> str:
 
 def _marks(values: Iterable[Any]) -> str:
     return ",".join("?" * len(list(values)))
+
+
+def _only(sql: str, args: list[Any], column: str, ids: set[str] | None) -> tuple[str, list[Any]]:
+    """`sql` limited to these ids in SQL, so a shard of 20 parses 20 rows, not the whole mailbox (Revision 17)."""
+    if ids is None:
+        return sql, args
+    wanted = sorted(ids)
+    if not wanted:
+        return sql + " AND 0", args
+    return sql + f" AND {column} IN (SELECT value FROM json_each(?))", args + [json.dumps(wanted)]
 
 
 class MailboxStore:
@@ -137,6 +156,10 @@ class MailboxStore:
                     touched.add(m.thread_id)
         return changed, touched
 
+    def ids_in(self, entity: str, mailbox_id: str) -> set[str]:
+        table = "threads" if entity == "EmailThread" else "messages"
+        return {r["id"] for r in self.con.execute(f"SELECT id FROM {table} WHERE mailbox_id = ?", (mailbox_id,))}
+
     def delete_missing(self, entity: str, mailbox_id: str, keep: set[str]) -> tuple[int, set[str]]:
         """After a full pass: remove rows of this mailbox the platform no longer has. Returns (count, conversations
         touched)."""
@@ -148,7 +171,7 @@ class MailboxStore:
             for row_id, _ in gone:
                 self.con.execute(f"DELETE FROM {table} WHERE id = ?", (row_id,))
                 if table == "threads":
-                    self.con.execute("DELETE FROM thread_text WHERE thread_id = ?", (row_id,))
+                    self._drop_text(row_id)
         return len(gone), {t for _, t in gone if t}
 
     # ── worked-out facts ──────────────────────────────────────────────────────
@@ -163,13 +186,34 @@ class MailboxStore:
     def all_thread_ids(self) -> set[str]:
         return {r["id"] for r in self.con.execute("SELECT id FROM threads")}
 
+    def _drop_text(self, thread_id: str) -> None:
+        r = self.con.execute("SELECT rid FROM text_rows WHERE thread_id = ?", (thread_id,)).fetchone()
+        if r is not None:
+            self.con.execute("DELETE FROM thread_text WHERE rowid = ?", (r["rid"],))
+            self.con.execute("DELETE FROM text_rows WHERE thread_id = ?", (thread_id,))
+
+    def _put_text(self, thread_id: str, body: str) -> None:
+        cur = self.con.execute("INSERT INTO thread_text (thread_id, body) VALUES (?, ?)", (thread_id, body))
+        self.con.execute("INSERT OR REPLACE INTO text_rows (thread_id, rid) VALUES (?, ?)", (thread_id, cur.lastrowid))
+
     def rebuild_facts(self, thread_ids: Iterable[str], our_emails: set[str]) -> int:
-        """Work out each conversation's facts again from its stored rows (conversation.py, no LLM)."""
+        """Work out each conversation's facts again from its stored rows (conversation.py, no LLM). Committed every
+        FACTS_CHUNK conversations, so a rebuild of a whole mailbox never holds the file for long."""
+        ids = sorted(set(thread_ids))
+        n = 0
+        for start in range(0, len(ids), FACTS_CHUNK):
+            n += self._rebuild_chunk(ids[start:start + FACTS_CHUNK], our_emails)
+        with transaction(self.con):
+            self.con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('facts_key', ?)",
+                             (self._facts_key(our_emails),))
+        return n
+
+    def _rebuild_chunk(self, ids: list[str], our_emails: set[str]) -> int:
         n = 0
         with transaction(self.con):
-            for tid in sorted(set(thread_ids)):
+            for tid in ids:
                 r = self.con.execute("SELECT row, mailbox_id FROM threads WHERE id = ?", (tid,)).fetchone()
-                self.con.execute("DELETE FROM thread_text WHERE thread_id = ?", (tid,))
+                self._drop_text(tid)
                 if r is None:                                  # messages of a conversation we don't hold
                     self.con.execute("DELETE FROM thread_facts WHERE thread_id = ?", (tid,))
                     continue
@@ -189,10 +233,8 @@ class MailboxStore:
                      pv.model_dump_json() if pv else None))
                 senders = " ".join(sorted({(m.from_email or "") for m in messages}))
                 body = "\n".join([thread.subject or "", senders] + [(m.body_text or m.snippet or "") for m in messages])
-                self.con.execute("INSERT INTO thread_text (thread_id, body) VALUES (?, ?)", (tid, body))
+                self._put_text(tid, body)
                 n += 1
-            self.con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('facts_key', ?)",
-                             (self._facts_key(our_emails),))
         return n
 
     def apply_thread_update(self, thread_id: str, fields: dict[str, Any], our_emails: set[str]) -> bool:
@@ -266,15 +308,20 @@ class MailboxStore:
                                (message_id, *mailbox_ids)).fetchone()
         return row["thread_id"] if row else None
 
-    def threads(self, mailbox_ids: list[str]) -> dict[str, EmailThread]:
-        rows = self.con.execute(f"SELECT row FROM threads WHERE mailbox_id IN ({_marks(mailbox_ids)})", mailbox_ids)
-        return {t.id: t for t in (EmailThread.model_validate_json(r["row"]) for r in rows)}
+    def threads(self, mailbox_ids: list[str], *, ids: set[str] | None = None) -> dict[str, EmailThread]:
+        sql, args = _only(f"SELECT row FROM threads WHERE mailbox_id IN ({_marks(mailbox_ids)})", list(mailbox_ids),
+                          "id", ids)
+        return {t.id: t for t in (EmailThread.model_validate_json(r["row"]) for r in self.con.execute(sql, args))}
 
-    def overviews(self, mailbox_ids: list[str], *, folder: str = "all",
-                  only_waiting_on_us: bool = False) -> list[tuple[str, ConversationOverview]]:
+    def conversation_count(self, mailbox_ids: list[str]) -> int:
+        return self.con.execute(f"SELECT COUNT(*) FROM thread_facts WHERE mailbox_id IN ({_marks(mailbox_ids)})",
+                                mailbox_ids).fetchone()[0]
+
+    def overviews(self, mailbox_ids: list[str], *, folder: str = "all", only_waiting_on_us: bool = False,
+                  ids: set[str] | None = None) -> list[tuple[str, ConversationOverview]]:
         """(mailbox id, overview) per conversation, newest real message first."""
-        sql = f"SELECT mailbox_id, overview FROM thread_facts WHERE mailbox_id IN ({_marks(mailbox_ids)})"
-        args: list[Any] = list(mailbox_ids)
+        sql, args = _only(f"SELECT mailbox_id, overview FROM thread_facts WHERE mailbox_id IN ({_marks(mailbox_ids)})",
+                          list(mailbox_ids), "thread_id", ids)
         if folder != "all":
             sql, args = sql + " AND folder = ?", args + [folder]
         if only_waiting_on_us:
@@ -284,22 +331,23 @@ class MailboxStore:
 
     def digests(self, mailbox_ids: list[str], *, only_stale_summaries: bool = False,
                 ids: set[str] | None = None) -> list[tuple[str, ConversationDigest]]:
-        sql = f"SELECT thread_id, mailbox_id, digest FROM thread_facts WHERE mailbox_id IN ({_marks(mailbox_ids)})"
+        sql, args = _only(f"SELECT thread_id, mailbox_id, digest FROM thread_facts WHERE mailbox_id IN "
+                          f"({_marks(mailbox_ids)})", list(mailbox_ids), "thread_id", ids)
         if only_stale_summaries:
             sql += " AND summary_current = 0"
-        rows = self.con.execute(sql + " ORDER BY newest_real_at DESC, thread_id", mailbox_ids)
-        return [(r["mailbox_id"], ConversationDigest.model_validate_json(r["digest"]))
-                for r in rows if ids is None or r["thread_id"] in ids]
+        rows = self.con.execute(sql + " ORDER BY newest_real_at DESC, thread_id", args)
+        return [(r["mailbox_id"], ConversationDigest.model_validate_json(r["digest"])) for r in rows]
 
     def price_views(self, mailbox_ids: list[str], *,
                     ids: set[str] | None = None) -> list[tuple[EmailThread, str, PriceConversation]]:
         """(conversation, mailbox id, price view) for conversations about prices or orders, our last message first."""
-        rows = self.con.execute(
-            f"""SELECT f.thread_id, f.mailbox_id, f.price, th.row FROM thread_facts f JOIN threads th ON th.id = f.thread_id
-                WHERE f.price IS NOT NULL AND f.mailbox_id IN ({_marks(mailbox_ids)})
-                ORDER BY f.our_last_at DESC, f.thread_id""", mailbox_ids)
+        sql, args = _only(f"""SELECT f.thread_id, f.mailbox_id, f.price, th.row FROM thread_facts f
+                                  JOIN threads th ON th.id = f.thread_id
+                                  WHERE f.price IS NOT NULL AND f.mailbox_id IN ({_marks(mailbox_ids)})""",
+                          list(mailbox_ids), "f.thread_id", ids)
+        rows = self.con.execute(sql + " ORDER BY f.our_last_at DESC, f.thread_id", args)
         return [(EmailThread.model_validate_json(r["row"]), r["mailbox_id"], PriceConversation.model_validate_json(r["price"]))
-                for r in rows if ids is None or r["thread_id"] in ids]
+                for r in rows]
 
     def content_hashes(self, thread_ids: Iterable[str]) -> dict[str, str]:
         ids = list(thread_ids)

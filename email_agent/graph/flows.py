@@ -41,6 +41,7 @@ from email_agent.contracts.flows import (
 from email_agent.mailbox.store import MailboxStore
 
 SHARD_SIZE = 20
+PAGE = 1000                      # the platform's largest page
 
 
 def matches(search: str | None, *texts: str | None) -> bool:
@@ -96,8 +97,11 @@ class ScopedMailbox:
     def price_views(self, mailbox_ids, **kw):
         return [x for x in self.store.price_views(mailbox_ids, **kw) if x[0].id in self.only]
 
-    def threads(self, mailbox_ids):
-        return {k: v for k, v in self.store.threads(mailbox_ids).items() if k in self.only}
+    def threads(self, mailbox_ids, **kw):
+        return {k: v for k, v in self.store.threads(mailbox_ids, **kw).items() if k in self.only}
+
+    def conversation_count(self, mailbox_ids):
+        return len(self.overviews(mailbox_ids))
 
 
 class Flow:
@@ -143,7 +147,7 @@ class Flow:
                 and matches(search, o.subject, o.counterpart, o.newest_real_text)]
 
     def _overview_digest(self, ids: list[str], keys: list[str]) -> list[dict]:
-        by_id = {o.thread_id: (mb, o) for mb, o in self.store.overviews(self.ids)}
+        by_id = {o.thread_id: (mb, o) for mb, o in self.store.overviews(self.ids, ids=set(ids))}
         out = []
         for tid in ids:
             mb, o = by_id[tid]
@@ -166,7 +170,7 @@ class TriageFlow(Flow):
 
     async def plan(self, verdicts, args, fetch):
         today = self.ctx.today.isoformat()
-        rows = self.store.threads(self.ids)
+        rows = self.store.threads(self.ids, ids={v.thread_id for v in verdicts})
         plan = WritePlan(skill=self.skill)
         for v in verdicts:
             th = rows.get(v.thread_id)
@@ -187,7 +191,7 @@ class TriageFlow(Flow):
 
     def counts(self, verdicts):
         n = sum(1 for v in verdicts if v.needs_reply)
-        total = len(self.store.overviews(self.ids))
+        total = self.store.conversation_count(self.ids)
         return {"needs_reply": n, "no_reply_needed": len(verdicts) - n, "not_waiting_on_us": total - len(verdicts),
                 "conversations_checked": total}
 
@@ -204,10 +208,10 @@ class SortFlow(Flow):
         wanted = set(thread_ids)
         return [{"mailbox": self.address.get(mb), **d.model_dump(mode="json", exclude_none=True,
                                                                 exclude={"summary", "summary_updated_at", "mailbox"})}
-                for mb, d in self.store.digests(self.ids) if d.thread_id in wanted]
+                for mb, d in self.store.digests(self.ids, ids=wanted)]
 
     async def plan(self, verdicts, args, fetch):
-        rows = self.store.threads(self.ids)
+        rows = self.store.threads(self.ids, ids={v.thread_id for v in verdicts})
         plan = WritePlan(skill=self.skill)
         for v in verdicts:
             th = rows.get(v.thread_id)
@@ -221,7 +225,9 @@ class SortFlow(Flow):
         return plan
 
     def positive(self, v):
-        th = self.store.threads(self.ids).get(v.thread_id)
+        if not hasattr(self, "_rows"):            # once per flow, not once per verdict (10,000 verdicts = 10,000 reads)
+            self._rows = self.store.threads(self.ids)
+        th = self._rows.get(v.thread_id)
         return th is not None and (th.importance != v.importance or th.split_category != v.split_category)
 
     def agree(self, a, b):
@@ -247,7 +253,7 @@ class SummaryFlow(Flow):
         wanted = set(thread_ids)
         return [{"mailbox": self.address.get(mb), **d.model_dump(mode="json", exclude_none=True,
                                                                 exclude={"importance", "split_category", "mailbox"})}
-                for mb, d in self.store.digests(self.ids) if d.thread_id in wanted]
+                for mb, d in self.store.digests(self.ids, ids=wanted)]
 
     async def plan(self, verdicts, args, fetch):
         today = self.ctx.today.isoformat()
@@ -275,9 +281,14 @@ class FollowUpFlow(Flow):
 
     async def plan(self, verdicts, args, fetch):
         """`message_id` comes from the facts (our last message), never from the model; the date is checked in code."""
-        overviews = {o.thread_id: o for _, o in self.store.overviews(self.ids)}
+        overviews = {o.thread_id: o for _, o in self.store.overviews(self.ids, ids={v.thread_id for v in verdicts})}
         waiting = [v for v in verdicts if v.waiting_on_them and v.thread_id in overviews]
-        existing = await fetch("EmailReminder.list", {"limit": 1000})
+        existing: list[Any] = []
+        while True:                    # every page: a reminder past the first 1,000 must not be created again
+            page = await fetch("EmailReminder.list", {"limit": PAGE, "offset": len(existing)})
+            existing += page
+            if len(page) < PAGE:
+                break
         have = {r.thread_id for r in existing if r.type == "follow_up" and not r.is_fired}
         plan = WritePlan(skill=self.skill)
         for v in waiting:
@@ -323,9 +334,7 @@ class PriceFlow(Flow):
     async def digests(self, thread_ids, fetch):
         wanted = set(thread_ids)
         out = []
-        for th, mb, v in self.store.price_views(self.ids):
-            if th.id not in wanted:
-                continue
+        for th, mb, v in self.store.price_views(self.ids, ids=wanted):
             item = {"mailbox": self.address.get(mb), **v.model_dump(mode="json", exclude_none=True, exclude={"mailbox"})}
             if th.deal_id:
                 deal = await fetch("Deal.get", {"id": th.deal_id})
@@ -335,7 +344,7 @@ class PriceFlow(Flow):
         return out
 
     async def plan(self, verdicts, args, fetch):
-        rows = self.store.threads(self.ids)
+        rows = self.store.threads(self.ids, ids={v.thread_id for v in verdicts})
         plan = WritePlan(skill=self.skill)
         for v in verdicts:
             if v.status != "agreed":

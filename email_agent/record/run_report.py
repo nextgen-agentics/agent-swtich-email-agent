@@ -149,6 +149,8 @@ def render(s: RunSummary) -> str:
              f"{f'{out.ended_at:%H:%M:%S}' if out and out.ended_at else '—'} |" if req else "| Started | — |",
              ""]
 
+    lines += ["Web page of this run (graph, every model call, writes, what went wrong): `view.html` in this folder "
+              f"(`uv run email-view {_cell(s.run_dir, 300)} --open`).", ""]
     lines += ["## How it stopped", ""]
     if final is None:
         last = s.steps[-1] if s.steps else None

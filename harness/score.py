@@ -2,9 +2,9 @@
 
     uv run python -m harness.score harness_runs/<batch>
 
-Writes <batch>/report.json (ScoreReport) and <batch>/report.md. Each task's checks run against one database
-snapshot per instance; the task's verdict is the worst of its checks. A check that raises is recorded as
-`unevaluated` — never a pass.
+Writes <batch>/report.json (ScoreReport), <batch>/report.md and <batch>/view.html (the batch page, Revision 15).
+Each task's checks run against one database snapshot per instance; the task's verdict is the worst of its checks.
+A check that raises is recorded as `unevaluated` — never a pass.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from email_agent.record.jsonio import dump_json
 from harness.contracts import SavedRun, ScoreReport, Verdict
 from harness.db import DbSnapshot, snapshot
 from harness.predicates import check_all, worst
+from harness.view import write_batch_view
 
 ICON = {"approve": "✅", "revise": "❌", "unevaluated": "⚪"}
 
@@ -72,7 +73,9 @@ def main() -> None:
     report = asyncio.run(score(batch))
     dump_json(batch / "report.json", report)
     (batch / "report.md").write_text(render(report))
+    page = write_batch_view(batch, report)
     print(render(report))
+    print(f"Page: {page.resolve().as_uri()}")
 
 
 if __name__ == "__main__":

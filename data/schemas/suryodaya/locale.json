@@ -1,0 +1,11 @@
+{
+  "country": "IN",
+  "base_currency": "INR",
+  "currency_symbol": "₹",
+  "number_format": "indian_lakh_crore",
+  "date_format": "dd/MM/yyyy",
+  "locale_tag": "en-IN",
+  "fiscal_year_start_month": "april",
+  "postal_code_label": "PIN Code",
+  "state_label": "State"
+}

@@ -136,6 +136,7 @@ class Action:
         self.mirror, self.on_sync, self.full_sync = mirror, on_sync, full_sync
         self._synced = False
         self._sync_lock = asyncio.Lock()
+        self._first_sync: asyncio.Task[None] | None = None
         self.created: set[str] = set()
 
     # ── entry point ──────────────────────────────────────────────────────────
@@ -241,11 +242,27 @@ class Action:
 
     # ── local reads ──────────────────────────────────────────────────────────
     async def _ensure_synced(self) -> None:
-        """Bring the local mailbox copy up to date once per run, before the first mailbox read."""
-        async with self._sync_lock:                  # graph nodes run in parallel: sync once
-            if self._synced:
-                return
-            await self._sync()
+        """Bring the local mailbox copy up to date once per run, before the first mailbox read. Every node awaits the
+        same sync, shielded: a node that times out stops waiting, but the sync (and its worker thread, which a cancel
+        cannot stop) runs to the end, so the next node never starts a second one on top of it."""
+        if self._synced:
+            return
+        if self._first_sync is None or (self._first_sync.done() and self._first_sync.exception() is not None):
+            self._first_sync = asyncio.get_running_loop().create_task(self._sync_once())
+        await asyncio.shield(self._first_sync)
+
+    async def _sync_once(self) -> None:
+        async with self._sync_lock:
+            if not self._synced:
+                await self._sync()
+
+    async def settle(self) -> None:
+        """At the end of a run, before the stores close: let a sync nobody waits for any more finish."""
+        if self._first_sync is not None and not self._first_sync.done():
+            try:
+                await self._first_sync
+            except Exception:  # noqa: BLE001 — the run is over; the next run syncs again
+                logging.getLogger(__name__).warning("the last sync of this run failed", exc_info=True)
 
     async def refresh(self) -> None:
         """Sync again now (before a batch of writes is guarded from the local copy)."""

@@ -115,8 +115,11 @@ class PollReport(BaseModel):
     unmatched: int = 0                          # admitted, but no subscription wants it
     runs: list[EventDecision] = Field(default_factory=list)
     seconds: float = 0.0
+    error: str | None = None                    # the poll failed (it is tried again at the next interval)
 
     def line(self) -> str:
+        if self.error:
+            return f"{self.instance}: poll failed, trying again next time: {self.error}"
         if self.baseline:
             return f"{self.instance}: first poll — cursor set, nothing raised ({self.sync_calls} sync call(s))"
         if not self.events:

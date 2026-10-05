@@ -68,8 +68,11 @@ class Governor:
         return ADMITTED
 
     # ── doing ────────────────────────────────────────────────────────────────
-    def admit_run(self, sub: Subscription, *, now: datetime | None = None) -> Verdict:
-        """May this subscription start one more run today? Claims the run slot when it says yes."""
+    def admit_run(self, sub: Subscription, *, per_run: int | None = None, now: datetime | None = None) -> Verdict:
+        """May this subscription start one more run today? Claims the run slot when it says yes, and reserves the
+        run's model calls (at most `per_run`, never more than is left today): the run is given that many as its
+        budget, so runs started together can never spend past the ceiling (found by the Revision 17 tests: a burst
+        of three runs spent twice the ceiling, because each was admitted before any had spent anything)."""
         day = day_of(now or datetime.now(timezone.utc))
         calls = self.store.window(day, sub.id, "llm_calls")
         if calls >= sub.max_llm_calls_per_day:
@@ -81,11 +84,13 @@ class Governor:
             return Verdict(admitted=False, control="max_runs_per_day",
                            reason=f"daily run ceiling reached: {runs} of {sub.max_runs_per_day}",
                            detail={"used": runs, "limit": sub.max_runs_per_day})
-        return ADMITTED
+        granted = self.store.reserve_up_to(day, sub.id, "llm_calls", per_run or sub.max_llm_calls_per_day,
+                                           sub.max_llm_calls_per_day)
+        return Verdict(admitted=True, detail={"llm_calls": granted})
 
-    def spent(self, sub: Subscription, llm_calls: int, *, now: datetime | None = None) -> None:
-        """What a finished run cost (the run slot was already claimed at admission)."""
-        self.store.record(day_of(now or datetime.now(timezone.utc)), sub.id, "llm_calls", llm_calls)
+    def spent(self, sub: Subscription, llm_calls: int, *, reserved: int = 0, now: datetime | None = None) -> None:
+        """What a finished run cost; what it reserved at admission and did not use is given back."""
+        self.store.record(day_of(now or datetime.now(timezone.utc)), sub.id, "llm_calls", llm_calls - reserved)
 
     def snapshot(self, sub: Subscription, *, now: datetime | None = None) -> dict:
         day = day_of(now or datetime.now(timezone.utc))

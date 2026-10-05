@@ -1,0 +1,11 @@
+{
+  "country": "US",
+  "base_currency": "USD",
+  "currency_symbol": "$",
+  "number_format": "western_thousand_million",
+  "date_format": "MM/dd/yyyy",
+  "locale_tag": "en-US",
+  "fiscal_year_start_month": "january",
+  "postal_code_label": "ZIP Code",
+  "state_label": "State"
+}

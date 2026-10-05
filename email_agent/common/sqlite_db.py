@@ -3,21 +3,40 @@
 Standard library `sqlite3` only. Every file is opened the same way: WAL (readers never block the one writer), foreign
 keys on, a busy timeout, and schema migrations numbered with `PRAGMA user_version`. One process writes each file; slow
 bulk work is moved off the event loop by the caller with `asyncio.to_thread`.
+
+One connection is shared by the event loop and those worker threads, and a transaction belongs to the connection, so
+every transaction holds the connection's lock (Revision 17: two memory recalls at once failed with "cannot start a
+transaction within a transaction").
 """
 
 from __future__ import annotations
 
 import sqlite3
-from contextlib import contextmanager
+import threading
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
+
+
+class LockedConnection(sqlite3.Connection):
+    """A connection with a re-entrant lock: one transaction at a time, whichever thread starts it."""
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.lock = threading.RLock()
+
+
+def lock_of(con: sqlite3.Connection) -> AbstractContextManager[Any]:
+    lock = getattr(con, "lock", None)
+    return lock if lock is not None else nullcontext()
 
 
 def connect(path: Path, migrations: list[str]) -> sqlite3.Connection:
     """Open (or create) `path` and bring its schema up to date. `migrations[i]` is the SQL that moves the file from
     version i to i + 1; applied ones are skipped, so a file opened by newer code is upgraded in place."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path, isolation_level=None, check_same_thread=False)   # autocommit; we open transactions
+    con = sqlite3.connect(path, isolation_level=None, check_same_thread=False,   # autocommit; we open transactions
+                          factory=LockedConnection)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
@@ -53,10 +72,11 @@ def _statements(sql: str) -> list[str]:
 @contextmanager
 def transaction(con: sqlite3.Connection) -> Iterator[None]:
     """One atomic write (the connection is in autocommit mode, so `with con:` alone would not group statements)."""
-    con.execute("BEGIN IMMEDIATE")
-    try:
-        yield
-    except BaseException:
-        con.execute("ROLLBACK")
-        raise
-    con.execute("COMMIT")
+    with lock_of(con):
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
+        con.execute("COMMIT")

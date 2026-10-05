@@ -123,12 +123,17 @@ def _found(row: dict | None) -> tuple[ReconcileVerdict, str, dict | None]:
 
 
 async def _list(mcp: McpSession, tool: str, args: dict[str, Any]) -> list[dict] | None:
-    out = await mcp.call(tool, TOOL_ARGS[tool].model_validate(args))
-    if not out.ok:
-        return None
-    data = out.data()
-    rows = data.get("data") if isinstance(data, dict) else data
-    return [r for r in rows or [] if isinstance(r, dict)]
+    """Every page of a list (a row past the first page would otherwise read as "not sent", and be sent again)."""
+    found: list[dict] = []
+    while True:
+        out = await mcp.call(tool, TOOL_ARGS[tool].model_validate({**args, "offset": len(found)}))
+        if not out.ok:
+            return None
+        data = out.data()
+        rows = [r for r in (data.get("data") if isinstance(data, dict) else data) or [] if isinstance(r, dict)]
+        found += rows
+        if len(rows) < args.get("limit", 20):
+            return found
 
 
 def _backfill(outbox: WriteOutbox, log: RunLog) -> int:

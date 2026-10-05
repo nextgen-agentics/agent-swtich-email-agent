@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import sys
 from datetime import date
+from pathlib import Path
 
 from rich.console import Console
 
@@ -86,6 +87,9 @@ def main() -> None:
         print(f"— crashed in {f.error.where} at step {f.error.iter}: {f.error.type}: {f.error.message}")
     served = ", ".join(f"{k} ×{n}" for k, n in outcome.served_by.items()) or "no LLM call answered"
     print(f"— served by: {served} · run log: {outcome.run_dir} · report: {outcome.run_dir}/report.md")
+    page = Path(outcome.run_dir) / "view.html"
+    if page.exists():
+        print(f"— page: {page.resolve().as_uri()}  (open it in a browser: the graph, every model call, the writes)")
     if f.stopped == "waiting" and f.reason:
         print(f"— {f.reason}")
     if f.stopped == "crashed":

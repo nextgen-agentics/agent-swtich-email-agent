@@ -32,7 +32,7 @@ from typing import Any, Iterator, get_args
 
 from pydantic import BaseModel
 
-from email_agent.common.sqlite_db import connect
+from email_agent.common.sqlite_db import connect, lock_of
 from email_agent.contracts.graph import (
     ACTIVE_STATES,
     PLANNER_TRIGGERS,
@@ -147,17 +147,18 @@ class RunStore:
                 self._depth -= 1
             return
         self._written = []
-        self.con.execute("BEGIN IMMEDIATE")
-        self._depth = 1
-        try:
-            yield
-        except BaseException:
-            self.con.execute("ROLLBACK")
-            raise
-        else:
-            self.con.execute("COMMIT")
-        finally:
-            self._depth = 0
+        with lock_of(self.con):
+            self.con.execute("BEGIN IMMEDIATE")
+            self._depth = 1
+            try:
+                yield
+            except BaseException:
+                self.con.execute("ROLLBACK")
+                raise
+            else:
+                self.con.execute("COMMIT")
+            finally:
+                self._depth = 0
         self._after_commit(self._written)
 
     def _after_commit(self, kinds: list[str]) -> None:
@@ -250,6 +251,10 @@ class RunStore:
 
     def node_state(self, node_id: str) -> NodeState:
         return self.node(node_id).state
+
+    def added_by(self) -> dict[str, int]:
+        """Node id → the journal event whose patch added it (a planner round's or a fan-out's trigger_event)."""
+        return {r["id"]: r["added_by"] for r in self.con.execute("SELECT id, added_by FROM nodes")}
 
     def snapshot(self) -> GraphSnapshot:
         nodes = {r["id"]: self._node(r) for r in self.con.execute("SELECT * FROM nodes ORDER BY id")}

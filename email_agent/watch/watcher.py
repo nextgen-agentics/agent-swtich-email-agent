@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -48,10 +49,11 @@ from email_agent.mailbox.store import MailboxStore
 from email_agent.mailbox.sync import OVERLAP, MailboxSync
 from email_agent.platform.context import build_context
 from email_agent.platform.mcp_session import McpSession
-from email_agent.watch.governor import Governor
+from email_agent.watch.governor import Governor, platform_time
 from email_agent.watch.store import EventStore
 
 RunFn = Callable[..., Awaitable[RunOutcome]]
+log = logging.getLogger(__name__)
 
 
 def load_subscriptions(path: Path, instance: str) -> list[Subscription]:
@@ -103,6 +105,15 @@ class Watcher:
         report.seconds = round(time.perf_counter() - started, 2)
         return report
 
+    async def poll_safely(self, since: str | None = None) -> PollReport:
+        """One poll that never stops the watcher: a failure (the platform not answering, a sync that gave up, a file
+        another run holds) is logged and reported, and the next poll tries again."""
+        try:
+            return await self.poll(since)
+        except Exception as e:  # noqa: BLE001 — a watcher left running for a day must outlive one bad poll
+            log.exception("poll of %s failed", self.instance)
+            return PollReport(instance=self.instance, error=f"{type(e).__name__}: {e}"[:500])
+
     def _changes(self, mirror: MailboxStore, report: PollReport, since: str | None) -> list[MailboxEvent]:
         """The events since the watcher's cursors (or `since`), and the cursors moved on."""
         assert self.ctx is not None
@@ -133,8 +144,10 @@ class Watcher:
                                        source=f"mailbox:{address.get(t.mailbox_id or '')}", thread_id=t.id,
                                        subject=t.subject, occurred_at=t.updated_at, actor=t.updated_by))
         if report.baseline:
+            # History, not arrivals: dated when they happened, so they never count toward the flood limit (found by
+            # the Revision 17 load test: 40 re-read events made the first real mail look like a flood)
             for e in events:
-                self.store.ingest(e)
+                self.store.ingest(e.model_copy(update={"observed_at": platform_time(e.occurred_at) or e.observed_at}))
             events = []
         if since is None:                                  # --since looks back without moving the cursors
             self.store.set_cursor("messages", max(filter(None, [msg_mark, newest_msg])))
@@ -143,7 +156,7 @@ class Watcher:
 
     # ── governing and dispatch ───────────────────────────────────────────────
     async def _process(self, events: list[MailboxEvent], report: PollReport) -> None:
-        jobs: list[tuple[MailboxEvent, Subscription]] = []
+        jobs: list[tuple[MailboxEvent, Subscription, int]] = []
         for event in events:
             if not self.store.ingest(event):
                 report.duplicates += 1
@@ -161,27 +174,28 @@ class Watcher:
                                                 reason=f"no subscription wants {event.type}"))
                 continue
             for sub in matching:
-                admit = self.governor.admit_run(sub)
+                admit = self.governor.admit_run(sub, per_run=self.settings.max_llm_calls)
                 if not admit.admitted:
                     self._refused(report, EventDecision(event_key=event.key, subscription_id=sub.id, admitted=False,
                                                         control=admit.control, reason=admit.reason))
                     continue
-                jobs.append((event, sub))
+                jobs.append((event, sub, int(admit.detail.get("llm_calls", 0))))
         if jobs:
             async with asyncio.TaskGroup() as tg:
-                tasks = [tg.create_task(self._dispatch(e, s)) for e, s in jobs]
+                tasks = [tg.create_task(self._dispatch(e, s, calls)) for e, s, calls in jobs]
             report.runs = [t.result() for t in tasks]
 
     def _refused(self, report: PollReport, d: EventDecision) -> None:
         self.store.decide(d)
         report.refused[d.control] = report.refused.get(d.control, 0) + 1
 
-    async def _dispatch(self, event: MailboxEvent, sub: Subscription) -> EventDecision:
+    async def _dispatch(self, event: MailboxEvent, sub: Subscription, reserved: int = 0) -> EventDecision:
         dry = not (sub.live and self.live)
         mailbox = event.source.removeprefix("mailbox:") or None
+        settings = self.settings.model_copy(update={"max_llm_calls": reserved}) if reserved else self.settings
         async with self._slots:
             try:
-                outcome = await self.run(sub.request, self.instance, self.settings, dry_run=dry,
+                outcome = await self.run(sub.request, self.instance, settings, dry_run=dry,
                                          threads=[event.thread_id], mailboxes=[mailbox] if mailbox else None)
             except Exception as e:  # noqa: BLE001 — a failed dispatch is a recorded fact, not a quiet night
                 d = EventDecision(event_key=event.key, subscription_id=sub.id, admitted=True, control="dispatch_failed",
@@ -189,7 +203,7 @@ class Watcher:
                 self.store.decide(d)
                 return d
         calls = sum(outcome.served_by.values())
-        self.governor.spent(sub, calls)
+        self.governor.spent(sub, calls, reserved=reserved)
         d = EventDecision(event_key=event.key, subscription_id=sub.id, admitted=True, run_id=outcome.run_id,
                           run_dir=outcome.run_dir, stopped=outcome.final.stopped, dry_run=dry, llm_calls=calls,
                           reason=f"{len(outcome.writes)} write(s)")
@@ -236,7 +250,7 @@ async def _watch(w: Watcher, args: argparse.Namespace) -> None:
         print(_report_text(await w.replay(args.replay)))
         return
     while True:
-        report = await w.poll(since=args.since)
+        report = await w.poll_safely(since=args.since)
         print(_report_text(report), flush=True)
         if args.once or args.since:
             return

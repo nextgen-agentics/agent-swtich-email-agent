@@ -1,665 +1,711 @@
-# Team 10: an email assistant for AgentSwitch, and the checker that proves it works
+# An email agent for AgentSwitch: Team 10, Email seat
 
-This repository holds two things:
+An AI agent that works a company mailbox on the AgentSwitch platform. You ask it in plain English ("What needs my
+reply today, and find the mail where they agreed the price."). It reads the mail, decides what needs doing, makes
+the changes on the platform, and tells you what it did and why.
 
-1. **An email agent**: a program that reads a company mailbox, works out what needs doing, and does it (flags mail
-   that needs a reply, finds agreed prices, writes summaries, sets reminders, remembers things about customers, sorts
-   the inbox). It uses AI models to read and judge mail, and ordinary code for everything that must be exact.
-2. **A harness**: a set of 28 test tasks and the code that runs the agent on them and then checks the **database**
-   (not the agent's own words) to decide whether it did the job.
-
-It was built for the AgentSwitch capstone course, for the **Email seat** (one "seat" = one job in a simulated
-company). AgentSwitch is a shared business platform used by the whole class: email, customers, deals, quotations,
-invoices, calendar and more, in one database. Our agent works on two of its company "books" (two separate companies
-with their own data):
+It was built for the AgentSwitch capstone course, for the **Email seat** (one job in a simulated company). The same
+agent works unchanged on two company "books":
 
 | Book | Company | Country, money, tax |
 |---|---|---|
 | **Suryodaya** | Suryodaya Precision Works | India, rupees, GST |
 | **Keystone** | Keystone Precision Works LLC | United States, dollars, sales tax |
 
-The course's own request for this seat is: **"What needs my reply today, and find the mail where they agreed the
-price."** The agent answers that, and does several more inbox jobs.
+![The run page of one real run: goals, the graph of steps, every model call and every write](docs/images/run-page.png)
+<!-- screenshot: docs/images/README.md, item 1 -->
+
+**In numbers:**
+- About 10,300 lines of agent code and 1,000 lines of harness. No agent framework.
+- 69 tests and 4 load tests, which run in about 7 seconds with no network.
+- A load test on a 50,000-message mailbox.
+- 25 bug reports filed against the platform.
 
 ---
 
 ## Contents
 
-1. [What the agent can do](#1-what-the-agent-can-do)
-2. [What it refuses to do](#2-what-it-refuses-to-do)
-3. [What makes it different](#3-what-makes-it-different)
-4. [Compared with AI email products](#4-compared-with-ai-email-products)
-5. [How a run works, step by step](#5-how-a-run-works-step-by-step)
-6. [How it stays safe](#6-how-it-stays-safe)
-7. [When something goes wrong](#7-when-something-goes-wrong)
-8. [How memory is used](#8-how-memory-is-used)
-9. [Searching the mailbox](#9-searching-the-mailbox)
-10. [The inbox watcher](#10-the-inbox-watcher)
-11. [Traces: seeing what a run did, step by step](#11-traces-seeing-what-a-run-did-step-by-step)
-12. [Running it inside AgentSwitch](#12-running-it-inside-agentswitch)
-13. [What is saved, and where](#13-what-is-saved-and-where)
-14. [The harness: how we prove it works](#14-the-harness-how-we-prove-it-works)
-15. [Setting it up](#15-setting-it-up)
-16. [Running it](#16-running-it)
-17. [Settings](#17-settings)
-18. [Libraries and tools used](#18-libraries-and-tools-used)
-19. [How the repository is organised](#19-how-the-repository-is-organised)
-20. [Where things stand: done, pending, future](#20-where-things-stand-done-pending-future)
-21. [Where to read more](#21-where-to-read-more)
+1. [A 5-minute tour](#1-a-5-minute-tour)
+2. [What it does, and what it refuses](#2-what-it-does-and-what-it-refuses)
+3. [How a run is orchestrated](#3-how-a-run-is-orchestrated)
+4. [The parts, one by one](#4-the-parts-one-by-one)
+5. [No agent framework](#5-no-agent-framework)
+7. [Design decisions, and why](#7-design-decisions-and-why)
+8. [Platform bugs we found, and how the agent works around them](#8-platform-bugs-we-found-and-how-the-agent-works-around-them)
+9. [One real run, step by step](#9-one-real-run-step-by-step)
+10. [How it is tested](#10-how-it-is-tested)
+11. [Load test: 50,000 emails](#11-load-test-50000-emails)
+12. [The harness: checked by the database, not by the agent's words](#12-the-harness-checked-by-the-database-not-by-the-agents-words)
+13. [Seeing a run: the run page, traces, Jaeger](#13-seeing-a-run-the-run-page-traces-jaeger)
+14. [Planned: the Jev decision model](#14-planned-the-jev-decision-model)
+15. [Setting it up and running it](#15-setting-it-up-and-running-it)
+16. [What a run leaves on disk](#16-what-a-run-leaves-on-disk)
+17. [Where things stand](#17-where-things-stand)
+18. [Repository layout](#18-repository-layout)
+19. [Where to read more](#19-where-to-read-more)
 
 ---
 
-## 1. What the agent can do
+## 1. A 5-minute tour
 
-You ask in plain English; the agent picks the right job (a "skill") for each part of what you asked.
+If you have five minutes, look at these, in this order:
+
+| # | Look at | What you will see |
+|---|---|---|
+| 1 | [`email_agent/agent.py`](email_agent/agent.py) | One run from start to finish, with crash handling and resume (`run`, `resume`, `_graph`) |
+| 2 | [`email_agent/graph/planner.py`](email_agent/graph/planner.py), `_check` | How code checks every plan the model proposes before anything happens |
+| 3 | [`email_agent/graph/workers.py`](email_agent/graph/workers.py), `judge_threads` and `validate_verdicts` | Mailbox-wide work split into parallel groups, and a second model checking the first |
+| 4 | [`email_agent/graph/outbox.py`](email_agent/graph/outbox.py) and [`reconcile.py`](email_agent/graph/reconcile.py) | Why a write is never sent twice, even after a crash |
+| 5 | [`tests/test_resume.py`](tests/test_resume.py) and [`tests/test_concurrency.py`](tests/test_concurrency.py) | What we test: crashes, timeouts, two things happening at once |
+| 6 | `uv run pytest` | 69 tests in about 7 seconds, with no network and no keys |
+
+---
+
+## 2. What it does, and what it refuses
+
+You ask in plain English. The agent splits the request into **goals** and picks one **skill** for each.
 
 | Skill | Ask it | What it changes on the platform |
 |---|---|---|
-| Triage replies | "What needs my reply today?" | Flags each conversation that needs a reply, due today |
-| Find price agreements | "Find the mail where they agreed the price." | Saves each agreed price as a memory note on that customer, and stars the conversation |
-| Summarise conversations | "Summarise each conversation in my mailbox." | Writes a short summary on each conversation that has none, or an out-of-date one |
-| Follow-up reminders | "Remind me to follow up wherever I am waiting on a reply." | Creates a "remind me if they don't reply" reminder |
-| Remember about a customer | "Remember that Cardinal wants every quote in USD." / "What do we remember about Kirloskar?" | Saves (or reads back) a memory note linked to that customer |
-| Sort the inbox | "Sort my inbox." | Sets each conversation's importance and category tab |
+| Triage replies | "What needs my reply today?" | Flags each conversation that needs a reply, due today, and says why |
+| Find price agreements | "Find the mail where they agreed the price." | Saves each agreed price as a memory on that customer, with figures checked by code, and stars the conversation |
+| Summarise conversations | "Summarise each conversation." | Writes the summary field where it is missing or out of date |
+| Follow-up reminders | "Remind me where I am waiting on a reply." | Creates a "remind me if they don't reply" reminder |
+| Remember about a customer | "Remember that Cardinal wants every quote in USD." | Saves (or reads back) a memory linked to that customer |
+| Sort the inbox | "Sort my inbox." | Sets each conversation's importance and category |
 
-One request can ask for several things ("What needs my reply today, and find the agreed price"). Each becomes its own
-goal, and the goals are worked on at the same time.
-
-Every answer says what was done, what was left alone and why, and anything that **needs your check** (section 6).
-
-## 2. What it refuses to do
-
-It says no, changes nothing, and saves the reason as data (so the harness can check the refusal without reading the
-answer) when a request:
-
-- needs another department's data ("What is the plant head's salary?") → *out of seat*;
+It **refuses**, changes nothing, and records the reason as data when a request:
+- needs another department's data, such as a salary → *out of seat*;
 - is about a mailbox that is not ours → *not our mailbox*;
-- asks for something it must not do (send mail, delete shared mail) → *not permitted*;
-- has no support in the mail (a price nobody agreed, a quote request that does not exist) → *no evidence* /
-  *unknown record*.
+- asks for something this seat must not do, such as sending mail → *not permitted*;
+- has no support in the mail, such as a price nobody agreed → *no evidence* or *unknown record*.
 
-## 3. What makes it different
+A request can mix both kinds. "What needs my reply today, and what is Ravi's salary?" answers the first part and
+refuses the second, in the same run.
 
-**It does the job, not just help with it.** AI email products make a person faster in their inbox. This agent reads
-the mail, decides, and makes the change (the flag, the summary, the reminder, the memory note), then reports what it
-did and why.
+---
 
-**It works next to the business records, not just the mail.** AgentSwitch keeps the mail in the same database as the
-customers, deals and sales orders, and each conversation is linked to its customer and deal. So when the agent finds
-"we are awarding RFQ-2026-0003 per your quote", it follows the link to the customer and the deal, takes the figures
-from our own quote line, checks that quantity × unit price = total, and compares them with the deal's line prices.
-Then it saves the agreed price as a memory note on the customer, where other agents can read it. A product that sees
-only the inbox cannot do that.
+## 3. How a run is orchestrated
 
-**It is careful in ways an inbox add-on does not need to be:**
-- **Two different AI models must agree** before anything is written. A second model re-checks every verdict that
-  would change data; where they disagree, nothing is written and the conversation is listed under "Needs your
-  check".
-- **A checker reviews the evidence before every answer**, and a third pass scores the answer from 0 to 100.
-- **The AI judges; code decides the facts.** Code picks the conversations, checks the figures, builds every change
-  and refuses anything outside our mailboxes.
-- **Nothing is ever written twice, even after a crash.** Every write is recorded before it is sent; a stopped run
-  can be resumed, and it first reads the live data to see which writes really happened.
-- **Every change can be undone**, and is made with the seat's own login, so the platform shows who did it.
+A run is a **graph that grows while it runs**. The planner (an AI model) adds a few steps. The steps run, in
+parallel where they can. Their results go back to the planner, which adds the next steps. This goes on until every
+goal has an answer or a refusal. Everything that happens is written to a journal first, so a run can stop at any point
+and be resumed.
 
-**It scales and stays fast.** An AI "planner" breaks the request into goals and next steps, and the steps run at the
-same time where they can. Mailbox-wide jobs are split into groups of 20 conversations that the AI judges in parallel,
-so the number of planning calls does not grow with the size of the inbox. It is built for mailboxes of tens of
-thousands of messages, and keeps its own local copy of the mailbox so it never downloads everything twice.
-
-**It remembers, watches, and can be traced.** It keeps what it knows about customers, what earlier runs did, and your
-standing rules for each company. It can watch the inbox and react to new mail by itself, within daily limits, without
-reacting to its own changes. Every run is recorded step by step and can be viewed in standard tracing tools.
-
-**One agent for every company on the platform.** It reads each company's country, currency, tax and date format from
-the platform, so the same agent works unchanged for the Indian company in rupees and the US company in dollars.
-Adding another company is one line of configuration.
-
-**It is checked by the database, not by its own words.** The harness reads the database after each run and compares
-it with answer keys decided by a person.
-
-**Our own code throughout.** The loop that runs the agent is written here (adapted from the course's S17 reference
-design), not taken from an agent framework.
-
-## 4. Compared with AI email products
-
-Our [gap report](docs/project/gap-report.md) compared AgentSwitch's email app with the leading AI email products
-(**Shortwave**, **Superhuman**, **Fyxer**, **Inbox Zero**). Each feature they have, and where this agent stands:
-
-| Feature (who has it) | What this agent does today |
-|---|---|
-| **"Needs you" list** (Fyxer, Inbox Zero, Shortwave) | ✅ **Built** (*triage replies*). Reads each conversation's own messages (the platform's "last sender" field is stale), decides who owes a reply, flags the ones that need us with today's due date (they show as *Due* in the inbox), and gives the reason for each |
-| **Automatic sorting** (Superhuman, Shortwave, Fyxer) | ✅ **Built** (*sort the inbox*). Sets importance and the category tab (Important / Team / VIP / News / Social / Other) on every conversation. Not done: archiving, labels, per-sender rules |
-| **Summaries on every conversation** (Shortwave, Superhuman) | ✅ **Built** (*summarise conversations*). Writes the summary field, only where it is missing or older than the newest message |
-| **Automatic follow-up reminders** (Superhuman, Fyxer) | ✅ **Built** (*follow-up reminders*). Creates "remind me if no reply" reminders where we are waiting on the other side. Not done: a drafted nudge |
-| **Acts on new mail as it arrives** (Shortwave, Inbox Zero) | ✅ **Built** (*inbox watcher*). Checks every 2 minutes (the platform cannot notify us) and starts a small run for each new message, within daily limits; dry by default |
-| **Ask questions of the mailbox** (Shortwave, Superhuman) | 🟡 **Partly.** The price question is answered with evidence (mail + customer + deal). "What do we remember about X" reads the memory notes. Search by meaning finds conversations worded differently. Not done: open questions about anything in the mailbox |
-| **Rules in plain English** (Shortwave, Inbox Zero) | 🟡 **Partly.** Your house rules for each company (`rules/<book>.md`) are followed in every run, and the watcher's rules say what to do on new mail. Not done: a rule editor in the app, or rules saved as memory per user |
-| **Other AI tools can drive the mailbox (MCP)** (Superhuman, Shortwave) | ✅ Already in AgentSwitch: this agent is built entirely on the platform's MCP tools |
-| **Replies drafted in your style** (Superhuman, Fyxer, Inbox Zero) | ❌ **Not built.** The agent never writes or sends mail (sending is refused). The sample mailboxes cannot send anyway |
-| **Blocking cold email, one-click unsubscribe** (Inbox Zero) | ❌ **Not built** |
-| **Finding a file someone sent** | ❌ **Not built.** The sample attachments are not linked to any message |
-| **Meetings from mail** (Shortwave, Superhuman, Inbox Zero) | ⛔ **Needs access** the Email seat does not have (the calendar) |
-| **Work that belongs to other teams** | 🟡 Refused with the reason *out of seat*. Not done: handing it over as an escalation |
-
-**What no inbox product can do, and this agent does:**
-- It ties the mail to the business: it follows each conversation to its customer and deal, checks prices against
-  them, and saves what it learns on the customer record for other agents.
-- It is checked by the database, against answer keys.
-- It works the same for every company on the platform.
-
-The gap report lists the screen changes AgentSwitch would need to show this work well. Examples: a "Needs you" view
-with the agent's reasons, summaries in the message list, and undo for what the agent changed.
-
-## 5. How a run works, step by step
-
-```
- you ask ─► 1 who, where, when ─► 2 planner: goals ─► 3 planner: next steps ─► 4 steps run (in parallel)
-                                                          ▲                          │
-                                                          └──── 5 results ◄──────────┘
-                                         ... until every goal is answered or refused ─► 6 answer + files
+```mermaid
+flowchart TD
+    A[Your request] --> B[Who, where, when<br/>login, mailboxes, today, locale<br/><i>code, no AI</i>]
+    B --> C[Planner: goals<br/>one skill per goal, or a refusal]
+    C --> D[Planner: next steps<br/>at most 4 a round]
+    D --> K{Code checks the plan}
+    K -- rejected, with the reason --> D
+    K -- accepted --> E[Steps run in parallel<br/>at most 6 at once]
+    E --> F[judge_threads: split the mailbox<br/>into groups of 20]
+    F --> G1[judge group 1]
+    F --> G2[judge group 2]
+    F --> G3[judge group N]
+    G1 & G2 & G3 --> H[join: code checks every verdict<br/>and builds the write plan]
+    H --> V[second model re-checks<br/>every verdict that would write]
+    V --> W[writes: guard, outbox, send]
+    W --> D
+    E --> R[answer: critic checks the evidence,<br/>then the answer, then a 0-100 score]
+    R --> Z[Answer and files on disk]
+    J[(Journal: run.sqlite<br/>every change, every model reply)] -.- E
+    J -.- D
+    J -.- W
 ```
 
-1. **Who, where, when.** Before any AI is used, code collects the facts: who we are, which mailboxes are ours, today's
-   date, the company's country and currency, and your standing rules for this book.
-2. **Goals.** The planner (an AI model) reads the request and the list of skills. It splits the request into goals,
-   one skill each. A goal with no fitting skill is refused straight away.
-3. **Next steps.** The planner looks at the goals and everything done so far, and adds the next few steps (at most 4
-   at a time). Code checks every step before accepting it:
-   - Is it allowed for this goal's skill?
-   - Are its details valid?
-   - Is it a repeat of work already done?
+The planner never sees each judging group. It sees one summary after the join: counts, problems and the write
+plan. So the number of planning calls does not grow with the size of the mailbox.
 
-   A rejected step goes back to the planner with the reason, up to 3 tries.
-4. **Steps run.** Ready steps run at the same time, up to 6. A step is either:
-   - **one tool call**: read a record, look up a customer, save a memory note; or
-   - **a whole-mailbox job** (`judge_threads`), which expands into its own small chain:
-     ```
-     pick conversations (code) ─► judge in groups of 20 (AI, in parallel) ─► collect + check (code)
-         ─► a second model re-checks what would change data ─► write the changes (code)
-     ```
-5. **Results** go back to the planner, which adds the next steps, or ends a goal with an answer or a refusal. Before a
-   goal ends, an AI **checker** looks at the evidence: is every part of the goal backed by real results? If not, the
-   planner must do more.
-6. **The answer** is written from the evidence only, scored, and saved with everything else (section 13).
+---
 
-The whole run is kept as a **graph**: each step is a box, and an arrow means "this one waits for that one". The graph
-and every event in it are saved in a small database file as the run goes. That is what makes resuming and tracing
-possible.
+## 4. The parts, one by one
 
-**Limits per run:** 12 planning rounds, 80 AI calls, 80 steps, 6 steps at once, 3 AI calls at once, 2 platform calls
-at once. All of them are saved, so a resumed run keeps what it has already used. Every platform call also has a
-90-second time limit.
+### The planner ([`graph/planner.py`](email_agent/graph/planner.py))
 
-**Which AI answers.** Each call goes to the first usable option on one ordered list: Gemini (up to five keys; the extra
-keys are used only when the first is out of quota or refused), then three models on W&B Inference (DeepSeek, GLM,
-Qwen). An option that is rate-limited, out of quota or failing is rested or dropped automatically, and every reply
-records who answered.
+The planner makes two kinds of calls:
+1. **Goals.** It turns the request into 1–8 goals. Each goal gets exactly one skill, or no skill and a refusal reason.
+   A goal with no skill is refused by code; the model is never asked how to refuse it.
+2. **Next steps.** It is shown the graph so far (each result cut to 4,000 characters) and adds at most 4 tasks.
 
-## 6. How it stays safe
+**Code checks every plan before it reaches the graph** (`_check`). A plan is sent back with the reason, up to 3
+times, if:
+- a task uses a capability that is not offered for its goal's skill;
+- its arguments do not pass the capability's typed model;
+- it repeats work that already exists (then it is dropped, and anything waiting on it waits on the original);
+- it waits on a step that does not exist, or on one that failed;
+- it writes to a conversation the two models disagreed on (that conversation is for you to check);
+- it is an answer added in the same round as its goal's work, before any result.
 
-The platform is shared with another team working on the same rows, so the agent is careful by design:
+**The planner can never declare the run finished.** Code finishes it when every goal has an answer or a refusal. The
+planner is not even called while every open goal still has work running. When the graph grows past 40,000
+characters, finished goals' tasks and then the oldest results are folded behind a visible "compacted" marker, so
+nothing disappears without a trace.
 
-- **Only our mailboxes.** Rows from other mailboxes are removed from every result before the AI sees them, and code
-  refuses to change anything that is not in our mailboxes or created by our login.
-- **Dry run.** `--dry-run` does everything except send changes: they are recorded as "would write".
-- **Approval gate.** `--approve-writes` stops before any change and lists what it would write. You then answer with
-  `--approve` or `--reject`.
-- **Two models must agree** before a judged change is written. Disagreements are held for you ("Needs your check").
-- **A record before every write.** Each write is recorded, with a key and the old values, before it is sent, so it is
-  never sent twice and can always be undone.
-- **Undo.** `scripts/agent/undo_run.py` takes back what a run wrote. It does this only where the row still holds what
-  the agent wrote, so it never overwrites someone else's later change.
-- **Refusals are data**, not just words in the answer.
-- **The AI never decides what is allowed.**
-  - Which tools a goal may use comes from its skill file.
-  - Which rows may change is decided by code.
-  - Neither comes from anything the AI or the mail says: mail and results are treated as untrusted data.
+### The executor ([`graph/executor.py`](email_agent/graph/executor.py))
 
-## 7. When something goes wrong
+The executor runs the steps:
+- **Parallel:** up to 6 steps at once, waking on the first to finish (`asyncio.wait`, first completed).
+- **Time limit:** each step has its own time limit.
+- **Cancelling:** a cancelled step's late result is thrown away.
+- **Fan-out wiring:** when a step splits into groups (a "fan-out"), anything already waiting on it is made to wait
+  for the fan-out's final step too. This was found live, when an answer ran before the groups had been judged.
+- **A failure is an outcome:** a step that fails (timeout, budget, bad output, error) becomes a result the planner
+  reads, never a crash.
 
-- **Crash, Ctrl-C or waiting for approval:** the run's files are still written, and the last line printed gives the
-  exact command to continue: `--resume runs/<run_id>`.
-- **Resume** continues the same run in its own folder.
-  - First it checks every write it was unsure about, by reading the live row: did the write happen, was it never sent,
-    or did someone else change the row?
-  - Then it carries on.
-  - AI replies already received are reused, not paid for again.
-- **A platform call with no answer** fails after 90 seconds on its own. If it was a write, it is checked against the
-  live row before the run ends. Opening and closing the connection have time limits too (60 and 20 seconds).
-- **A failing AI model** (busy, out of quota, a bad key) moves the call to the next option. If every option is
-  resting, the run waits a little, then stops cleanly with the reason.
-- **Crash drills pass:** a script stops the agent on purpose at 6 different points and resumes it. Each time it checks
-  that nothing was lost or written twice (section 20).
+### The journal ([`graph/store.py`](email_agent/graph/store.py))
 
-## 8. How memory is used
+The run's whole state lives in one SQLite file, `runs/<id>/run.sqlite`:
+- **What is in it:** steps and their links, a numbered event journal, budgets, waiting steps, the outbox, and every
+  model reply.
+- **Every change is one transaction**, together with its journal event.
+- **Exactly one plan per event:** each planner patch is recorded against the event that caused it. After a crash,
+  every outcome without a plan is planned again exactly once.
+- **Budgets survive a resume:** per run, 12 planner rounds, 80 model calls and 80 steps.
+- **Saved replies are reused:** every model reply is saved under (step, hash of the request). A resumed run gets the
+  same reply for free.
 
-The agent has eight kinds of memory. Each has one place it lives and one way it reaches the AI:
+### Fan-out and the judging groups ([`graph/workers.py`](email_agent/graph/workers.py), [`graph/flows.py`](email_agent/graph/flows.py))
 
-| Memory | What it is | Where it lives | How long |
+Mailbox-wide skills work like this:
+1. `judge_threads` picks the candidates **with code**. For triage, those are the conversations whose newest real
+   message is from the other side and unanswered.
+2. It splits them into groups of 20 and adds one judging step per group, plus a join, a check and a write step.
+3. **Each judging call must return exactly one verdict per given conversation.** Any extra, missing or repeated id is
+   sent back once for repair.
+4. **The join** (code) drops invalid verdicts and builds the write plan. A planned write is never the same write
+   twice.
+5. **The fan-out is sized to what the run's budget can pay for.** A 10,000-conversation sort judges the newest groups
+   that fit and reports how many it left, rather than running out halfway (found by the load test, section 11).
+
+### The second model: the validator
+
+Before anything is written, **a different model** re-judges every verdict that would cause a write, plus 5 of the
+others, to spot misses:
+- It uses the same prompt, in a fresh context, and is read-only.
+- Only writes both models agree on go out.
+- A disputed conversation is **held** and listed under "Needs your check". Code refuses any later attempt to write it.
+- If the check cannot finish (for example, the budget runs out), the unchecked conversations are held too. Nothing is
+  written unchecked.
+- With no second model configured, the check is skipped, and the run says so.
+
+### The critic and the verifier
+
+**The critic:** before a goal ends with an answer (or a refusal that rests on evidence), it reads the goal's evidence
+and says whether it is enough:
+- "Not ready" fails the step, with what is missing, so the planner adds work.
+- After 2 rejections of the same goal it is overruled: the gap counts as unavailable, so the agent never searches
+  forever.
+- A broken critic reply never blocks a goal.
+
+**The verifier:** after the answer, it scores it from 0 to 100 against the evidence and writes a short critique. It is
+kept as evidence only; it never changes the answer.
+
+### Capabilities and skills ([`graph/capabilities.py`](email_agent/graph/capabilities.py), [`skills/`](email_agent/skills))
+
+Each skill is a `SKILL.md` file: a name, the tools it may use, and its rules in plain words. The capability registry
+is built from them:
+- Every tool has typed arguments (pydantic models generated from the platform's own tool schemas).
+- Every tool is marked as reading or writing.
+- A goal may use only its skill's tools, plus `answer` and `refuse`.
+
+### The write path ([`platform/writes.py`](email_agent/platform/writes.py))
+
+Every write goes through one path:
+1. **Guard:**
+   - Creating is allowed.
+   - Updating is allowed only for rows in our mailboxes, or rows our login created.
+   - Deleting is allowed only for rows this run created.
+   - A run started by the watcher may change only its own conversation.
+2. **Dry run:** the write is recorded, but not sent.
+3. **Outbox:** the write is recorded *before* it is sent. A write already completed reuses its receipt. A write left
+   halfway by a crash is never sent again blindly.
+4. **Send:** through MCP, or through REST when a field must be set to empty (MCP cannot send an empty value).
+5. **Record:** `writes.jsonl`, with each field's value before and after, so every write can be undone.
+6. **Local copy:** the run's copy of the mailbox is updated, so later steps in the run see the change.
+
+### Reconcile and resume ([`graph/reconcile.py`](email_agent/graph/reconcile.py))
+
+`--resume` continues a stopped run in its own folder. First, every write left uncertain is settled **by reading the
+live row on the platform**:
+- **happened:** the row holds what we sent. It is recorded once.
+- **not sent:** the row still holds the old values. The step sends it again.
+- **changed:** someone else changed the row since. It is never overwritten.
+- **unreadable:** it stays uncertain, and the step keeps waiting.
+
+Then steps that were running run again, and saved model replies are reused. A write the platform never answered
+during a run (a timeout) is settled the same way before the run ends.
+
+### The local copy of the mailbox ([`mailbox/`](email_agent/mailbox))
+
+The platform answers about one call per second (measured), so the agent keeps its own copy of our mailboxes in
+SQLite.
+- **It is synced by watermark:** the first time, every page; after that, only what changed. An unchanged mailbox
+  costs one call per table.
+- **Code works out the facts** of each conversation from its own messages: who wrote last, whether we replied, our
+  last message, the price lines.
+- **It does not trust two kinds of platform data:**
+  - the platform's own "last sender" fields, which are stale (BUG-005);
+  - word-for-word mirror copies in the sample mail, which do not count as replies (BUG-022).
+- **Full-text search** uses SQLite FTS5. Search by meaning (embeddings) is built but off by default.
+
+### Memory ([`memory/`](email_agent/memory))
+
+Memory has eight layers. Each has one store, one lifetime, and one rule for how it reaches a prompt.
+
+| # | Layer | Where it lives | How it reaches the model |
 |---|---|---|---|
-| **Standing instructions** | how the agent should behave: its prompts, one instruction file per skill, and **your house rules** for each company (`rules/<book>.md`, optional) | `email_agent/prompts/`, `email_agent/skills/`, `rules/` | until you change them |
-| **What we know about customers** | memory notes saved on the platform (e.g. "Cardinal wants quotes in USD"). The agent keeps a local copy, and reads a customer's notes before saving a new one, so it never saves the same note twice | the platform + `state/<book>/memory.sqlite` | until switched off or expired |
-| **Saved verdicts** | a conversation that has not changed since it was last judged is not judged again (command-line runs only; the harness always judges afresh) | `state/<book>/memory.sqlite` | until the conversation changes |
-| **The run's own working memory** | the graph: every step, its result and its state | `runs/<id>/run.sqlite` | one run |
-| **Large results** | a tool result too big for the AI is saved to a file; the AI sees a preview | `runs/<id>/artifacts/` | one run |
-| **The to-do list** | the graph's pending steps, shown as a checklist in the terminal and the report | `runs/<id>/run.sqlite` | one run |
-| **Past runs** | a one-line summary of each run (what was asked, how it ended, what was written). The planner sees the last 3 on the same mailbox, as history only | `state/<book>/memory.sqlite` | permanent |
-| **Keeping the AI's input small** | long results are cut to their key fields; when the graph gets very long, finished work is folded away behind a visible note | — | per planning round |
+| 1 | Instructions: prompts, skills, your house rules per company | `prompts/`, `skills/`, `rules/<book>.md` | in the instructions of every role |
+| 2 | What we know about customers | the platform's agent memory, plus a local read copy synced by watermark | the `recall_memory` tool: a customer's memories, then the company's |
+| 3 | Verdict cache | `memory.sqlite`, keyed by the conversation's content, skill and prompts | never: it replaces a judging call |
+| 4 | The run's working memory | the graph in `run.sqlite` | the clipped graph |
+| 5 | Large results | `runs/<id>/artifacts/`, named by content | a preview and the artifact id |
+| 6 | The run's to-do list | the graph's pending steps | the graph |
+| 7 | Earlier runs on this mailbox | one record per run | "recent runs" in the planner's first round |
+| 8 | Compaction | in place | the visible "compacted" marker |
 
-A memory note always says where it came from: the request, or the email it was taken from. A broad note (about the
-whole company) can be used in a narrow request (about one customer), never the other way round, so one customer's
-notes are never shown for another.
+A recall for one customer returns that customer's memories and the company's, never another customer's. Every
+memory keeps its source. The agent adds memory only through `remember_fact`, which refuses an unknown customer and
+skips an exact repeat.
 
-## 9. Searching the mailbox
+### The inbox watcher ([`watch/`](email_agent/watch))
 
-- **By words (the default):** a fast full-text index over the local copy of the mailbox.
-- **By meaning (optional, `--search hybrid`):**
-  - each message is turned into a list of numbers that captures its meaning (Google's embedding model);
-  - conversations close in meaning to the request are found even when they use other words: "customer paid less than
-    the invoice" finds the "Short payment on INV-…" threads;
-  - the results are mixed with the word search, and the AI still judges every candidate.
+The platform cannot notify us, so the watcher polls every 2 minutes. Each new inbound message becomes an event:
+- **Stored once by its key**, so it is never handled twice, even after a restart.
+- **Then checked by the governor**, which refuses an event when:
+  - **it was caused by us:** the row was changed within 5 minutes of a write we sent. Our own record of writes
+    decides this, because the agent and the person share one login.
+  - **it is part of a flood:** more than 30 events a minute from one mailbox.
+  - **a daily ceiling is used up:** runs per day, or model calls per day. Each run reserves its share when it is
+    admitted, so runs started together can never spend past the ceiling.
+- **Admitted events** start a run limited by code to that one conversation. It is a **dry run** unless the
+  subscription and the watcher both say live.
 
-On 20 test questions written to avoid the conversations' own words, meaning-based search found every expected
-conversation in the top 5, where the word search found none. It stays off by default until a person confirms those
-test questions (section 20).
+Every refusal is recorded with its reason.
 
-## 10. The inbox watcher
+### The model route ([`llm/route.py`](email_agent/llm/route.py))
 
-`email-watch` (or `python -m email_agent.watch`) checks a book every 2 minutes (the platform cannot notify us). It
-turns what changed into events: a new message from someone else, or a conversation that changed. For each event:
+Every model call goes to the first usable option on one ordered route:
+- **The options:** Gemini (keys 1–5, failover only), then W&B models (DeepSeek-V4.1-Flash → GLM-5.3-Flash →
+  Qwen3-30B).
+- **When an option fails:**
+  - a rate limit rests that option for as long as the server asks;
+  - a used-up daily quota rests it until midnight Pacific;
+  - server trouble rests it for a minute;
+  - a refused key or an unknown model drops it.
+- **Who answered:** every reply records the provider, the model and the key slot (never the key).
+- **W&B reasoning:** off by default (`WANDB_THINKING=false`), for speed (section 15).
 
-1. it is recorded once, so seeing the same change again does nothing;
-2. it is refused if **we caused it**: the watcher keeps a list of every write the agent and the undo script sent, so
-   the agent never reacts to its own changes;
-3. it is refused if one mailbox suddenly floods (more than 30 events a minute);
-4. it is matched against your rules in `watch/subscriptions.yaml` (for example: "on new mail, ask: What needs my reply
-   today?");
-5. a run is started, **limited by code to that one conversation**. It is a **dry run** unless the rule says
-   `live: true` *and* the watcher was started with `--live`. Each rule has a daily limit on runs and on AI calls.
+---
 
-Every decision (run started, refused and why, nothing to do) is saved, and `--status` shows them.
+## 5. No agent framework
 
-## 11. Traces: seeing what a run did, step by step
+The loop that runs the agent is our own code. There is **no LangGraph, no LangChain, and no networkx**:
+- The graph's cycle check uses the Python standard library (`graphlib`).
+- State lives in SQLite (`sqlite3`).
+- Concurrency is plain `asyncio`.
+- Every boundary between parts has a **pydantic** contract (`email_agent/contracts/`).
 
-Every run also writes its timeline as a **trace** (`runs/<id>/spans.jsonl`). The trace holds:
-- the run itself, each planning round and each step;
-- each AI call, with which model answered and how many tokens it used;
-- each write.
-
-Each entry has real start and end times, and says which larger entry it was part of. Nothing new has to be recorded
-for this: the trace is built from the run's own event log.
-
-It uses **OpenTelemetry**, the common standard for traces, so a run can be sent to any tracing tool (Jaeger, Grafana,
-Honeycomb, …) and viewed as a timeline (`email-trace runs/<id> --otlp <address>`). With the
-`OTEL_EXPORTER_OTLP_ENDPOINT` setting, every run sends its trace by itself. No email text or AI prompt goes into a
-trace.
-
-## 12. Running it inside AgentSwitch
-
-The agent already runs **against** AgentSwitch from outside: it logs in as the Email seat and uses the same tools a
-person in that seat may use. This is how AgentSwitch could run it **as** the Email seat's agent.
-
-**How it plugs in today.**
-- It logs in with the seat's account through the platform's web API, then calls the platform's tools over **MCP**
-  (the standard way AI agents call tools) at `<book address>/api/mcp`. It needs nothing that the seat does not
-  already have.
-- **It reads:** conversations, messages, mailboxes, reminders, memory notes, customers and deals.
-- **It writes only:**
-  - conversations: flag and due date, star, summary, importance and category tab;
-  - memory notes;
-  - reminders.
-- Every change is made with the seat's own login, so the app shows who made it, and each one is listed (with the old
-  values) in the run's `writes.jsonl`.
-
-**Three ways the platform could use it:**
-
-1. **On request** — a person asks in the app, the platform runs the agent and shows the answer:
-   ```bash
-   uv run email-agent "What needs my reply today?" --instance keystone
-   ```
-   or from Python, which returns the answer, each goal's result and every change made:
-   ```python
-   import asyncio
-   from email_agent.agent import run
-   from email_agent.config import get_settings
-
-   outcome = asyncio.run(run("What needs my reply today?", "keystone", get_settings(), dry_run=True))
-   print(outcome.final.answer)                 # the answer, for the person
-   for goal in outcome.final.goals:            # each goal: answered, or refused with a reason
-       print(goal.text, goal.done, goal.refusal)
-   print(len(outcome.writes), "changes")       # every change (or "would change" in a dry run)
-   ```
-2. **In the background** — the inbox watcher as a long-running service, one per company:
-   ```bash
-   uv run email-watch --instance keystone            # dry runs only
-   uv run email-watch --instance keystone --live     # real changes, for rules marked live: true
-   ```
-   The platform decides what it may do through `watch/subscriptions.yaml` (which events, which request, live or not,
-   and a daily cap on runs and on AI calls). `email-watch --status` shows what it did and refused today.
-3. **With a person approving** — the agent proposes, a person decides:
-   ```bash
-   uv run email-agent "Flag what needs my reply" --instance keystone --approve-writes
-   # the run stops "waiting"; its report.md lists every change it would make
-   uv run email-agent --resume runs/<run_id> --approve    # or --reject
-   ```
-
-**Where results show up in the app:**
-
-| Change | Where it shows in AgentSwitch |
+| Library | What it is used for |
 |---|---|
-| Reply flags with today's due date | the inbox, as *Due* |
-| Stars, summaries, importance and category | the conversation, its summary field, and the inbox tabs |
-| Memory notes (agreed prices, customer preferences) | the agent-memory records, linked to the customer |
-| Follow-up reminders | the conversation's reminders |
+| `mcp` (official SDK) | talking to AgentSwitch's MCP server |
+| `httpx2` | REST calls (login, and setting a field to empty) |
+| `google-genai`, `openai` | Gemini, and W&B's OpenAI-compatible endpoint |
+| `pydantic`, `pydantic-settings` | every contract and every setting |
+| `tenacity` | retries with back-off |
+| `faiss-cpu`, `numpy` | search by meaning (off by default) |
+| `rich`, `pyyaml` | the terminal view; task and subscription files |
+| `opentelemetry-*` (optional) | sending traces to a tracing tool |
+| `pytest`, `pytest-asyncio`, `ruff`, `mypy`, `import-linter` | tests and checks |
 
-**Adding another company book** takes one line in `email_agent/config.py` (`INSTANCES`: its name and web address),
-and its password in `.env`. The agent reads that company's mailboxes, country, currency and date format from the
-platform itself.
+---
 
-**Watching it work:**
-- each run's `report.md` and `spans.jsonl`;
-- `email-watch --status`;
-- with `OTEL_EXPORTER_OTLP_ENDPOINT` set, every run's trace goes to the platform's own tracing tool.
+## 7. Design decisions, and why
 
-**What it needs:**
-- Python 3.12 and `uv`;
-- network access to the book;
-- one AI key (Gemini or W&B);
-- a writable `state/` folder for its local copies.
+| Decision | Why |
+|---|---|
+| **A local copy of the mailbox** | The platform answers about one call per second. A 10,000-message mailbox read on every step would take minutes; synced by watermark, an unchanged mailbox costs one call per table |
+| **Groups of 20, judged in parallel** | Planner calls stay at about 3–8 per run whatever the inbox size; each group is its own step: timed, retried, resumable, cached |
+| **Code decides the facts; the model judges** | The platform's thread fields are stale (BUG-005) and the sample mail has mirror copies (BUG-022); a model reading them was wrong, code reading the messages is not |
+| **Two models must agree before a write** | On Keystone, price verdicts on order confirmations changed between runs; the second model held 9 of 15, which would otherwise have been written on a coin toss |
+| **Polling, not push** | The platform has no way to notify us |
+| **Dry run by default for unattended runs** | The books are shared with other teams; a watcher run writes only when you say so twice |
 
-**What AgentSwitch would need to add for a smoother fit** (from the gap report):
-- an event when new mail arrives, so the watcher does not have to check every 2 minutes;
-- a "Needs you" view that shows the agent's reasons;
-- summaries shown in the message list;
-- an undo button for the agent's changes.
+---
 
-## 13. What is saved, and where
+## 8. Platform bugs we found, and how the agent works around them
 
-| Where | What | In git? |
+We filed **25 bug reports** against AgentSwitch (22 on Suryodaya, 3 on Keystone). Where the agent has to live with a
+bug, the code says so with a `WORKAROUND(BUG-…)` tag:
+
+| Bug | What happens | How the agent copes |
 |---|---|---|
-| `runs/<run_id>/` | one folder per run (see below) | no |
-| `harness_runs/<batch>/` | one folder per harness batch: each task's saved run, then `report.md` with a verdict per task | no |
-| `state/<book>/mailbox.sqlite` | the local copy of our mailboxes (conversations, messages, worked-out facts, word index, meaning vectors) | no |
-| `state/<book>/memory.sqlite` | the local copy of memory notes, past-run summaries, saved verdicts, memory vectors | no |
-| `state/<book>/events.sqlite` | the watcher's events, decisions, daily counts, and the list of writes we sent | no |
-| `state/<book>/*.faiss` | fast lookup files for meaning-based search (rebuilt from the databases if missing) | no |
-| `rules/<book>.md` | your house rules (optional) | yes |
-| `watch/subscriptions.yaml` | the watcher's rules | yes |
-| `data/` | what the research and check scripts saved (platform schemas, bug probes, drill and search results) | yes |
-| `.cache/` | the login token (never printed) | no |
+| BUG-001 | the same text field arrives in three shapes (comma text, list, list of objects) | one parser for all three (`contracts/platform.py`) |
+| BUG-005 | a conversation's "last sender" and counts are not updated when messages arrive | ignored; facts are worked out from the messages themselves |
+| BUG-006 | update tools declare defaults (`is_read=false` …) that would reset fields | only the fields we set are sent (`exclude_unset`) |
+| BUG-008 | booleans as 0/1, counts as 2.0, dates without times | lenient parsing at the boundary |
+| BUG-014 | the platform's memory search never matches | our own full-text search over a local copy |
+| BUG-019/026 | listings include other teams' mailboxes | every row from a mailbox that is not ours is dropped before the model sees it |
+| BUG-022 | the sample mail pairs each message with a word-for-word copy from the other side | copies are marked and never count as replies |
 
-**Inside one run folder** (`runs/<run_id>/`), written even if the run crashes:
+We also found and fixed bugs in our own code. The list is in [docs/known-issues.md](docs/known-issues.md). The newest
+13 were found by the concurrency and load tests. Two examples:
+- two memory lookups at once collided in the database;
+- a full sync could delete a row that changed while it was being read.
+
+---
+
+## 9. One real run, step by step
+
+The course's own request, as a dry run on Suryodaya (2026-10-04): *"What needs my reply today, and find the mail
+where they agreed the price."*
+
+| | |
+|---|---|
+| Time | 70 s |
+| Steps (graph nodes) | 12: 2 mailbox-wide jobs, 2 judging groups, 2 joins, 2 second-model checks, 2 write steps, 1 answer, 1 refusal |
+| Model calls | 11: 1 goals, 3 planning, 1 judging (the other group's verdicts came from the cache), 2 by the second model, 2 critic, 1 answer, 1 score |
+| Who answered | DeepSeek-V4.1-Flash 9, GLM-5.3-Flash 2 (the second model) |
+| Tokens | 47,781 in, 15,959 out (13,571 of those were the model "thinking"; see `WANDB_THINKING`) |
+| Writes | 3 flags, recorded as a dry run |
+
+What happened:
+1. The planner made **two goals**: triage replies, and find price agreements.
+2. Both mailbox-wide jobs ran **at the same time**.
+3. **Triage:** 20 conversations were checked. 7 need a reply: 3 were flagged in this run, 4 already were. The second
+   model agreed on all 12 judged conversations.
+4. **Price:** no conversation shows the other side accepting our price. The critic agreed the evidence supports
+   that, so the goal ended as a refusal ("no evidence"), not an invented answer.
+5. The answer got a verifier score of **98**. The verifier noted that the date format was ambiguous.
+
+![The graph of this run](docs/images/run-graph.png)
+<!-- screenshot: docs/images/README.md, item 2 -->
+![Every model call: question, answer, who answered, tokens](docs/images/run-model-calls.png)
+<!-- screenshot: docs/images/README.md, item 3 -->
+![The timeline of the run](docs/images/run-timeline.png)
+<!-- screenshot: docs/images/README.md, item 4 -->
+
+---
+
+## 10. How it is tested
+
+
+**How:** each test runs the **real agent** (planner checks, graph, flows, write path, outbox, reconcile, stores,
+watcher). Only two things are replaced:
+- **A fake AgentSwitch** ([`tests/kit/platform.py`](tests/kit/platform.py)). It holds rows in memory and logs every
+  call. It can also fail in the ways we saw live:
+  - a write whose answer never comes;
+  - the agent dying right after the platform applied a write;
+  - team 11 changing a row while we read it;
+  - other mailboxes' rows leaking into a list.
+- **A scripted model** ([`tests/kit/model.py`](tests/kit/model.py)). It has one script per role (goals, planner,
+  judge, second model, critic, answer) and keeps every question it was asked, so a test can check what the model saw.
+
+A test then checks what a person would see:
+- what reached the platform;
+- `writes.jsonl`;
+- the journal;
+- the final answer and refusals;
+- the trace and the run page.
+
+There are no network calls and no keys. Settings never read `.env`.
+
+| File | What it proves |
+|---|---|
+| `test_resume.py` | a crash before, during or after a write, a write with no answer, Ctrl-C: the run resumes and **no write is sent twice** |
+| `test_write_safety.py` | a dry run sends nothing; other teams' mailboxes, rows another team changed, and conversations outside a watcher run are never written; approve and reject |
+| `test_seat_requests.py` | the seat's requests end to end: triage, price agreement, both together, refusals, a mixed request |
+| `test_model_trouble.py` | a rate-limited key, every model dead, nonsense plans, verdicts about the wrong conversation, the second model disagreeing, the budget running out, a critic that never says yes |
+| `test_large_inbox.py` | groups of 20 and an answer that waits for all of them; budget-sized fan-out; every write checked by the second model; incremental sync; other mailboxes' rows never reach the model |
+| `test_memory.py` | a fact comes back for the same customer only; a memory switched off on the platform stops counting; earlier runs of this mailbox only |
+| `test_watcher.py` | new mail starts one dry run; our own writes never wake it; floods; daily ceilings; no event handled twice after a restart |
+| `test_observability.py` | the trace is one tree, and a resumed run shows the unfinished attempt and its retry; the run page is right for every way a run ends, and safe against `</script>` in mail text |
+| `test_concurrency.py` | MCP calls, steps and model calls stay within their limits; a hung call fails alone; two things writing the local database at once; two runs on one state folder; rows changing between pages; 1,001 reminders; a token that expires mid-run |
+| `test_scale.py` | the load test (section 11) |
+
+**How we know the tests catch real breakage:** for each area we broke the behaviour on purpose in a scratch copy of
+the code (more than 20 such breaks) and checked that the matching test failed. Examples:
+- reconcile resending a write that did happen;
+- the guard switched off;
+- the second model's check limited to 40 verdicts;
+- the run page not escaping mail text.
+
+Every one was caught.
+
+**What the tests do not cover:**
+- **How the real platform behaves.** That is the harness's job (section 12), against the live books.
+- **How good the real models' judgement is.** That is also the harness's job, against answer keys decided by a person.
+- **Token expiry on a long MCP session.** REST logs in again on 401 and is tested; MCP is not, because the token
+  lifetime has not been measured.
+- **Search by meaning at 50,000 messages.** It is off by default; its first embedding would take hours (see known
+  issues).
+- **Two separate watcher processes on one mailbox.** One is enough today.
+
+```bash
+uv run pytest                 # 69 tests, about 7 s
+uv run pytest -m scale -s     # the 4 load tests, about 25 s, with the numbers printed
+```
+
+---
+
+## 11. Load test: 50,000 emails
+
+The test builds a mailbox of **50,000 messages in 10,000 conversations**. 300 of them end with an unanswered question
+from the customer. It then measures four things:
+- a cold copy of the mailbox, and a second run with nothing changed;
+- triage, writing the 300 flags;
+- a sort of all 10,000 conversations;
+- the watcher on that mailbox.
+
+It also measures the longest time the agent froze its own event loop, which stalls time limits and other runs.
+
+On a laptop, with the fake platform and scripted model, so these numbers measure **our code**:
+
+| Run | Before the load-test fixes | Now |
+|---|---|---|
+| Cold copy of the mailbox, then triage | 15.1 s | **4.6 s** |
+| Second run, nothing changed | 1.9 s | **0.4 s** |
+| Triage writing 300 flags | 16.0 s | **4.6 s** |
+| Sort of all 10,000 conversations | 25.1 s, and the run **ended in an error** (budget used up halfway) | **5.6 s**, done; judges what the budget allows and reports the rest |
+| Watcher's first poll (copies the mailbox) | 13.9 s | **4.2 s** |
+| Watcher, one new mail | the new mail was **refused as a "flood"** | **0.3 s**, one run |
+| Longest event-loop freeze | 0.88 s | **0.39 s** |
+| Peak memory | about 300–360 MB | about 290–350 MB |
+
+What the load test found, and what was fixed:
+- **The facts rebuild got slower and slower as the mailbox grew.** Full-text rows were deleted by a column SQLite
+  cannot index. They are now mapped by number, and committed 200 conversations at a time.
+- **Every judging group re-read the whole mailbox.** Reads are now limited to the group's own conversations.
+- **A whole-mailbox sort used up the budgets halfway.** The fan-out is now sized to the budget, and the rest is
+  reported.
+- **Only the first 40 writes were re-checked by the second model.** Now all of them are.
+- **The watcher's first poll counted re-read history toward the flood limit**, so the first real mail was refused.
+
+**On the live platform**, each call adds about one second. A cold copy of 50,000 messages is about 60 calls, roughly
+a minute. After that, an unchanged mailbox is 2 calls. Model calls dominate the rest: triage of 300 waiting
+conversations is 15 judging calls, 3 at a time.
+
+---
+
+## 12. The harness: checked by the database, not by the agent's words
+
+The harness ([`harness/`](harness)) runs the agent on **28 tasks** (14 of them should be refused) and then reads the
+**platform's database** to decide each verdict. It never reads the answer text.
+- **Every run is saved to disk before anything is scored.**
+- **There are 7 checks:**
+  1. needs-reply flags;
+  2. price agreements recorded;
+  3. summaries written;
+  4. follow-ups created;
+  5. memory recorded;
+  6. inbox sorted;
+  7. refused without writes.
+- **The answer keys** were decided by a person (`harness/ground_truth/`).
+- **The verdicts** are *approve*, *revise* or *unevaluated*. *Unevaluated* (a dry run, an undecided key, a crash) is
+  never a pass.
+
+```bash
+uv run harness-run --instance suryodaya      # runs every task; saves to harness_runs/<batch>/
+uv run harness-score harness_runs/<batch>    # verdicts, report.md and a web page
+```
+
+---
+
+## 13. Seeing a run: the run page, traces, Jaeger
+
+**The run page.** Every run, including one that crashed or was interrupted, writes `runs/<id>/view.html`. It shows:
+- how the run ended, and the command that continues it;
+- what went wrong, in one list;
+- each goal and its answer;
+- the graph, where you can click a step to see its input, result, model calls and writes;
+- each planning round;
+- every model call, in full;
+- every write, with its value before and after;
+- the checks;
+- a timeline.
+
+<!-- ![What went wrong, in one list](docs/images/run-problems.png) -->
+<!-- screenshot: docs/images/README.md, item 5 -->
+
+**The trace.** Every run also writes `runs/<id>/spans.jsonl`. It holds the run, its planning rounds, its steps, the
+model calls inside them and the writes, each with real start and end times. It is built from the journal, so nothing
+is recorded twice. It uses OpenTelemetry, so any tracing tool can show it. No mail text or prompt goes into a trace.
+
+**Seeing traces in Jaeger** (optional; needs Docker):
+```bash
+docker run --rm --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one:latest   # UI on 16686, OTLP/HTTP on 4318
+uv sync --group otel                                                                         # the OpenTelemetry exporter
+uv run email-trace runs/<run_id> --otlp http://localhost:4318/v1/traces                      # send one saved run
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318                                    # or: every new run sends its own
+```
+Then open http://localhost:16686, pick the service **team10-email-agent**, and press *Find Traces*. Some details:
+- `OTEL_EXPORTER_OTLP_ENDPOINT` is the **base** address; the agent adds `/v1/traces` itself. With
+  `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, or after `--otlp`, give the full address.
+- Only the HTTP exporter is installed, so Jaeger's port 4318 is used (not 4317, which is gRPC).
+- Without the `otel` group, the run still writes `spans.jsonl`; only the sending is skipped.
+
+<!-- ![One run as a trace in Jaeger](docs/images/jaeger-trace.png) -->
+<!-- screenshot: docs/images/README.md, item 6 -->
+
+---
+
+## 14. Planned: the Jev decision model
+
+*Designed, not built.*
+
+[Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) is TypeSafe's "System One" model:
+- **What it does:** you give it text and program state and a typed question, and it returns a **typed answer with a
+  calibrated probability**. The question types are yes/no, one of a list (up to 255 options), or a score on a scale.
+- **Speed:** 70–500 ms.
+- **What it does not do:** generate text.
+- **Access:** through OpenRouter (`typesafe/jev-1.13`) or TypeSafe's SDK.
+
+**Why it fits this agent.** Most of the agent's model calls are not writing. They are small typed decisions, and Jev
+could make several of them:
+
+| Decision today | As a Jev question |
+|---|---|
+| Does this conversation need our reply? (triage judging) | yes/no, with a probability |
+| How important is it, and which tab? (sort judging) | importance as a score (low → high); tab as one of 6 choices |
+| Was a price agreed? (price judging) | one of: agreed, lost, open, quote only, not about price. **The figures stay with the LLM and are checked by code** |
+| Which skill does this goal need? (goals step) | one of the 6 skills, or none |
+| Is this new mail worth a run? (the watcher) | yes/no, a cheap check before a full run starts |
+
+**How it would fit in:**
+- A `DecisionModel` interface next to today's `Llm`. A judging group asks it for each conversation's typed answer.
+- **The probability replaces the second-model check.** Write when p ≥ 0.85. List the conversation under "Needs your
+  check" from 0.5 to 0.85. Do not write below 0.5. The thresholds are settings, like the budgets.
+- Every Jev decision goes into the journal and the trace like a model call, and is cached like a verdict, so resume,
+  the run page and the cache work unchanged.
+- **The LLM keeps** what Jev cannot do: the planner's steps, answers, summaries, and the figures of a price.
+
+**What it would change:** in a small mailbox, judging and the second model's checks are a few of a run's calls (3 of
+11 in the run in section 9). In a large one they are almost all of them: triage of 300 waiting conversations is 15
+judging calls and up to 15 checks, against about 8 others. Moved to a sub-second model priced per input token, that
+part would go from minutes of model time to seconds, and the second model would no longer be needed for those
+decisions.
+
+---
+
+## 15. Setting it up and running it
+
+You need Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync
+cp .env.example .env        # then fill in: the book passwords, and at least one AI key (Gemini or W&B)
+uv run pytest               # no keys needed
+```
+
+**Run it.** Start with `--dry-run`: it does everything except change platform data.
+```bash
+uv run email-agent "What needs my reply today, and find the mail where they agreed the price." --instance suryodaya --dry-run
+uv run email-agent "Sort my inbox." --instance keystone --approve-writes      # stops before any write, for your yes
+uv run email-agent --resume runs/<run_id> --approve                           # (or --reject: nothing is written)
+uv run email-agent --resume runs/<run_id>                                     # continue a run that crashed or was stopped
+uv run email-watch --instance suryodaya                                       # the inbox watcher (dry by default)
+uv run email-view runs/<run_id> --open                                        # the run page
+```
+
+**The main settings** (in `.env`):
+
+| Setting | What it does |
+|---|---|
+| `PROVIDER`, `GEMINI_API_KEY` … `_5`, `WANDB_API_KEY`, `WANDB_MODELS` | which models answer, in order |
+| `WANDB_THINKING` | `false` (the default) asks W&B models not to reason first: faster, fewer tokens. DeepSeek-V4.1-Flash allows it; GLM-5.3-Flash always reasons; a model that refuses the switch is asked again without it |
+| `VALIDATE_VERDICTS` | the second model's check (on) |
+| `MAX_PLANNER_ROUNDS`, `MAX_LLM_CALLS`, `MAX_NODES` | the per-run budgets (12, 80, 80) |
+| `MAX_WORKERS`, `LLM_CONCURRENCY`, `MCP_CONCURRENCY` | how much runs at once (6, 3, 2) |
+| `SEARCH` | `fts` (full text, the default) or `hybrid` (adds search by meaning) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | send every run's trace to a tracing tool |
+
+Undoing a live run's writes is done with a maintenance script that is not part of this repository. Every write
+records its value before, in `writes.jsonl`, so it can be taken back.
+
+---
+
+## 16. What a run leaves on disk
+
+Every run has its own folder, `runs/<run_id>/`, written at every exit, including a crash:
 
 | File | What it holds |
 |---|---|
-| `request.json` | what was asked, and every option (written first, before anything else) |
-| `context.json` | who, where, today, our mailboxes, house rules |
-| `run.sqlite` | the graph and its event log (every step, AI call and write), saved AI replies, the write record |
-| `steps.jsonl` | one line per step, including each full AI request and reply |
-| `writes.jsonl` | one line per change made (or that a dry run would make), with the old values; this is what undo reads |
-| `final.json`, `outcome.json` | the answer, each goal's result or refusal, tokens used, who answered |
-| `report.md` | all of the above, readable |
-| `spans.jsonl` | the trace (section 11) |
-| `artifacts/` | large results, if any |
+| `request.json` | what was asked, with every option (written before any network call) |
+| `context.json` | who, where, when: login, mailboxes, today, the company's locale |
+| `run.sqlite` | the graph, the journal, the budgets, the outbox and every model reply (what `--resume` reads) |
+| `steps.jsonl` | one line per step: every model call in full, every tool call, every sync |
+| `writes.jsonl` | every write, with the values before (what undo uses) |
+| `final.json`, `outcome.json` | the answer, each goal's ending, how the run stopped, tokens, who answered |
+| `report.md` | the run in plain words |
+| `spans.jsonl` | the trace |
+| `view.html` | the run page |
 
-## 14. The harness: how we prove it works
+---
 
-- **28 tasks** (`harness/tasks.yaml`) across both books: the seat request, every skill, and 14 tasks where the right
-  answer is a refusal.
-- **Running and scoring are separate steps.**
-  - `harness-run` runs the agent on each task, and saves the run and the database state *before* any scoring.
-  - `harness-score` then reads the **database** and compares it with an **answer key** (`harness/ground_truth/`). A
-    person decided the answer key by opening each conversation in the web app.
-- **The checks never read the agent's answer text.** A flag either is on the row or is not.
-- **Three verdicts:**
-  - `approve`: checked and right;
-  - `revise`: checked and wrong;
-  - `unevaluated`: could not be checked (an undecided answer key, a dry run, or a crash). Unevaluated never counts as
-    a pass.
-- A script proposes answer-key entries (`scripts/agent/propose_ground_truth.py`); a person decides each one.
+## 17. Where things stand
 
-## 15. Setting it up
+**Built and tested:**
+- the six skills, refusals, and mixed requests;
+- the live graph, with planner checks, fan-out, the second model, the critic and the verifier;
+- the outbox, reconcile and resume;
+- the local mailbox copy;
+- memory;
+- the watcher;
+- the model route;
+- the run page and traces;
+- the harness;
+- the load test.
 
-You need Python 3.12 or newer, and [uv](https://docs.astral.sh/uv/).
+**Built, off by default:**
+- search by meaning (hybrid), until its test questions are confirmed;
+- the approval gate (`--approve-writes`).
 
-```bash
-uv sync                     # installs the agent, the harness and the development tools
-cp env.example .env         # then fill in .env: the two book passwords, and at least one AI key (Gemini or W&B)
-uv sync --group otel        # optional: only needed to send traces to a tracing tool
+**Not built:**
+- replies drafted in your style;
+- sending mail (refused on purpose);
+- unsubscribe and blocking;
+- meetings from mail (needs calendar access the seat does not have);
+- replacing one memory with a newer one;
+- a run page that updates while the run is going.
+
+**Planned:** the Jev decision model (section 14).
+
+**Known limits** (the details are in [docs/known-issues.md](docs/known-issues.md)):
+- the first embedding of a very large mailbox for search by meaning takes hours;
+- an MCP session keeps the token it opened with;
+- two new mails on one conversation in one poll start two runs;
+- the executor starts no new step while the planner is thinking.
+
+---
+
+## 18. Repository layout
+
+```
+email_agent/        the agent
+  agent.py            one run, start to finish; resume
+  graph/              planner, executor, journal store, outbox, reconcile, capabilities, workers, flows
+  platform/           MCP and REST clients, tool calls, the write path, the run's context
+  llm/                the model route
+  mailbox/            the local mailbox copy: store, sync, conversation facts, search
+  memory/             long-term memory, episodes, the verdict cache
+  watch/              the inbox watcher, governor, event store
+  record/             what a run leaves behind: run log, report, run page, traces
+  contracts/          every pydantic model, by area
+  prompts/, skills/   the model prompts, and one SKILL.md per skill
+harness/            tasks, answer keys, checks that read the database, scoring
+tests/              the tests and their kit (fake platform, scripted model)
+data/               the four platform files the tests read (login, locale, tool list, mailbox)
+watch/              which events start which runs (subscriptions.yaml)
+docs/               architecture, known issues, gap report
 ```
 
-`.env` is never committed. The terminal and logs name Gemini keys by their slot number (#1, #2…), never the key.
+---
 
-**Checking the code** (the first three must pass before a commit):
-```bash
-uv run ruff check           # style and mistakes (rules pinned in pyproject.toml)
-uv run mypy                 # types
-uv run lint-imports         # imports go scripts → harness → email_agent only
-uv run pytest               # the hand-written tests in tests/ (to be written by hand: "no tests ran" until then)
-```
+## 19. Where to read more
 
-## 16. Running it
-
-Every command below can also be run in its long form: `uv run email-agent …` is the same as
-`uv run python -m email_agent …`.
-
-**Start with `--dry-run`:** the agent does everything except change platform data.
-
-```bash
-uv run email-agent "What needs my reply today, and find the mail where they agreed the price." \
-    --instance suryodaya --dry-run
-```
-
-Remove `--dry-run` to really write (flags, stars, memory notes, reminders). Other requests:
-
-```bash
-uv run email-agent "Summarise each conversation in my mailbox." --instance keystone --dry-run
-uv run email-agent "Remind me to follow up wherever I am waiting on a reply." --instance keystone --dry-run
-uv run email-agent "Sort my inbox." --instance suryodaya --dry-run
-uv run email-agent "Remember that Cardinal Tillage Works wants every quote in USD." --instance keystone --dry-run
-uv run email-agent "What do we remember about Kirloskar Pumps?" --instance suryodaya
-uv run email-agent "What is the plant head's salary?" --instance keystone      # should refuse
-```
-
-**Options:**
-
-| Option | What it does |
+| Document | What it covers |
 |---|---|
-| `--instance suryodaya` or `keystone` | which company book to work in |
-| `--dry-run` | record changes without sending them |
-| `--as-of 2026-09-29` | treat that date as today |
-| `--mailbox <address>` | work only in this mailbox (can be given more than once); by default, all of ours |
-| `--provider gemini` or `openai` | which AI provider goes first (`openai` = W&B Inference) |
-| `--model <id>` | that provider's first model |
-| `--no-fallback` | use only the first model, never switch |
-| `--no-cache` | judge every conversation again (by default, unchanged ones reuse saved verdicts) |
-| `--no-history` | the planner does not see the last runs |
-| `--search hybrid` | also search by meaning (section 9) |
-| `--full-sync` | re-read the whole mailbox into the local copy, not only what changed |
-| `--approve-writes` | stop before any change; the run ends "waiting", and `report.md` lists the changes |
-| `--resume runs/<run_id>` | continue a crashed, interrupted or waiting run (no request text needed) |
-| `--resume … --approve` / `--reject` | send the changes waiting for approval, or decline them |
-| `--quiet` / `--verbose` | only the answer, or extra detail |
-
-**House rules** (optional): write plain instructions for one book in `rules/<book>.md`, for example
-`rules/keystone.md`. Every run on that book uses them, and `report.md` shows them. Keep them short (4,000 characters
-at most):
-```markdown
-- Name the customer by its full company name in every answer.
-- Newsletters and automatic notices never need a reply.
-```
-
-**The inbox watcher:**
-```bash
-uv run email-watch --instance suryodaya            # check every 2 minutes until Ctrl-C
-uv run email-watch --instance suryodaya --once     # one check
-uv run email-watch --instance suryodaya --status   # today's counts, refusals, last decisions
-uv run email-watch --instance suryodaya --replay <message_id>   # react to a recorded message again
-```
-
-**Traces and reports:**
-```bash
-uv run email-trace runs/<run_id> --console                              # print the trace
-uv run email-trace runs/<run_id> --otlp http://localhost:4318/v1/traces # send it to a tracing tool
-uv run email-report runs/<run_id>                                       # rebuild a run's report.md
-```
-
-**The harness** (run, then score):
-```bash
-uv run harness-run --instance suryodaya                  # every Suryodaya task (writes for real)
-uv run harness-run --only refuse-salary-keystone,price-keystone   # chosen tasks
-uv run harness-run --dry-run --instance keystone         # changes nothing (verdicts: unevaluated)
-uv run harness-score harness_runs/<batch>                # report.md with a verdict per task
-```
-`harness-run` takes the same `--provider`, `--model`, `--no-fallback`, `--quiet` and `--verbose` options. After a live
-batch, undo it: `uv run python scripts/agent/undo_run.py harness_runs/<batch>`.
-
-**Other useful commands:**
-```bash
-uv run python scripts/agent/undo_run.py runs/<run_id>            # take back one live run's changes (--dry-run to preview)
-uv run python scripts/agent/propose_ground_truth.py --instance keystone --feature price   # needs-reply|price|follow-ups|sort
-uv run python scripts/agent/eval_search.py --instance suryodaya  # how well each kind of search finds the test questions
-uv run python scripts/agent/drill_resume.py --fake               # the crash drill on a toy graph (no platform, no AI)
-uv run python scripts/agent/drill_resume.py --agent --instance suryodaya   # the crash drill on the real agent (dry)
-uv run python scripts/agent/check_mirror.py --instance suryodaya # does the local mailbox copy match the platform?
-uv run python scripts/repo/check_submission.py                   # PASS/FAIL against what the course grades
-uv run python scripts/repo/refresh.py                            # regenerate every generated doc and data file
-```
-
-## 17. Settings
-
-All settings come from `.env` (template: `env.example`) and have sensible defaults (`email_agent/config.py`). The
-ones you are most likely to change:
-
-| Setting | What it controls |
-|---|---|
-| `AS_EMAIL`, `AS_SURYODAYA_PASSWORD`, `AS_KEYSTONE_PASSWORD` | the platform login |
-| `PROVIDER` | which AI provider goes first: `gemini` or `openai` (W&B) |
-| `GEMINI_MODEL`, `GEMINI_API_KEY` … `GEMINI_API_KEY_5` | the Gemini model and keys (keys 2–5 only as backup) |
-| `WANDB_API_KEY`, `WANDB_MODELS` | the W&B key and its models, in order |
-| `MAX_PLANNER_ROUNDS`, `MAX_LLM_CALLS`, `MAX_NODES` | the per-run limits (12, 80, 80) |
-| `MAX_WORKERS`, `LLM_CONCURRENCY`, `MCP_CONCURRENCY` | how much runs at once (6 steps, 3 AI calls, 2 platform calls) |
-| `VALIDATE_VERDICTS` | the second-model check (on by default) |
-| `SEARCH` | `fts` (words, the default) or `hybrid` (words and meaning) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | send every run's trace to a tracing tool |
-
-## 18. Libraries and tools used
-
-| Library / tool | What we use it for |
-|---|---|
-| [uv](https://docs.astral.sh/uv/) | installing, locking and running everything |
-| `mcp` (the official MCP SDK) | talking to the platform's tools (MCP is the standard way AI agents call tools) |
-| `httpx2` | the platform's web API (login, and a few calls MCP cannot do) |
-| `google-genai` | Gemini models (answers and embeddings) |
-| `openai` | W&B Inference models (they speak the same format) |
-| `pydantic`, `pydantic-settings` | a checked data shape at every hand-off, and the settings |
-| `tenacity` | retrying failed calls with growing waits |
-| `faiss-cpu`, `numpy` | fast "closest meaning" lookup for meaning-based search |
-| `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http` | sending traces (optional group) |
-| `rich` | the live terminal view |
-| `pyyaml` | the harness tasks, answer keys and watcher rules |
-| Python's own `asyncio`, `sqlite3`, `graphlib` | running steps at the same time; every local database; checking that the graph has no loops |
-| `ruff`, `mypy`, `import-linter` | checking style and mistakes, types, and the one-way imports (development) |
-| `pytest`, `pytest-asyncio` | the hand-written tests (development) |
-| `datamodel-code-generator` | generating the checked shapes of the platform tools' inputs (development) |
-
-The project is set up the standard way (`pyproject.toml`, following the course's S17 reference): pinned lower
-versions for every library, a `dev` group for the checking tools, an optional `otel` group, named commands
-(`email-agent`, `email-watch`, `email-trace`, `email-report`, `harness-run`, `harness-score`), and the ruff, mypy,
-pytest and import rules written down in the file so every machine checks the same things.
-
-The design of the planner, graph, write record, checker, memory, watcher and traces is adapted from the course's
-**S17** reference code (credited in each file). It is rewritten with checked data shapes and a local database instead
-of whole JSON files, with fixes for gaps we found in S17.
-
-## 19. How the repository is organised
-
-```
-email_agent/           the agent
-  __main__.py            the command line (email-agent)
-  agent.py               one run from start to finish, and resume
-  config.py              settings
-  graph/                 the planner, the step runner, the event log, the write record, the steps themselves,
-                         the mailbox-wide jobs ("flows"), and the check of unsure writes (reconcile)
-  platform/              talking to AgentSwitch: MCP and web clients, the run's facts, tool calls, the write path
-  llm/                   the ordered list of AI models and keys, with automatic switching
-  mailbox/               the local mailbox copy: storage, syncing, each conversation's facts, search
-  memory/                memory notes, past runs, saved verdicts
-  watch/                 the inbox watcher (email-watch)
-  record/                what a run leaves behind: log, report, terminal view, trace, large results
-  common/                small shared helpers
-  contracts/             the checked data shapes, by area
-  prompts/               the instructions given to each AI role
-  skills/                one folder per skill, each with its SKILL.md
-harness/               the 28 tasks, the checks, the answer keys, the runner and the scorer
-scripts/               run by hand
-  agent/                 crash drills, search check, mailbox-copy check, undo, answer-key proposer
-  platform/              exploring and probing the platform (read-only unless a probe says otherwise)
-  bugs/                  keeping our bug reports in step with the class board
-  repo/                  regenerate docs and data, generate data shapes, check the submission
-  contracts/             the scripts' own data shapes
-docs/                  plans, design, guides, platform notes, bugs (start at docs/README.md)
-data/                  what the scripts saved
-watch/                 the watcher's rules
-pyproject.toml         dependencies, named commands, and the ruff / mypy / pytest / import rules
-```
-
-Imports only go one way: `scripts` may use `harness` and `email_agent`, `harness` may use `email_agent`, and the agent
-uses neither. `uv run lint-imports` checks this.
-
-## 20. Where things stand: done, pending, future
-
-**Done.** All of it is checked; the evidence for each item is in [docs/project/plan.md](docs/project/plan.md).
-- The six skills and the refusals.
-- The planner-led graph with parallel judging.
-- The second-model check, the evidence checker and the answer score.
-- The local mailbox copy: its reads match the platform exactly on both books.
-- Resume after a crash, checking unsure writes against the live data, and the approval gate. The crash drill passes at
-  every crash point: 8 of 8 on the real agent (dry), 12 of 12 on the toy graph.
-- Memory: customer notes, past runs, house rules, saved verdicts.
-- The inbox watcher, meaning-based search (off by default), and traces.
-- The harness: on the latest dry runs every task finishes, and all 14 refusal checks pass.
-- Standard project setup: ruff, mypy and the import rule all pass on the whole codebase.
-
-**Pending: needs a person** (tracked in [docs/project/pending.md](docs/project/pending.md)):
-- run the harness **live** on both books, score it, and undo it (live runs change the shared books);
-- run the live crash drill and the live watcher check;
-- decide the remaining **answer keys** (follow-ups, prices, sorting); until then those tasks score "unevaluated";
-- confirm the 20 search test questions, then decide whether meaning-based search becomes the default;
-- replace Gemini key #2 (it is invalid);
-- write the hand-written tests (the course requires them to be written by hand).
-
-**Known limits** (see [docs/bugs/revision-12-findings.md](docs/bugs/revision-12-findings.md#3-still-open)):
-- price verdicts on some purchase-order confirmations differ between runs (the second model holds them for you);
-- meaning-based search can still add one off-topic conversation;
-- a resumed run counts one planning round twice (the AI reply itself is reused for free).
-
-**Future work** (designed, not built):
-- the email features in section 4 marked not built: drafted replies, cold-email blocking, finding files, handing work
-  over to other teams;
-- a web page that shows a run's graph live;
-- a load test on a fake platform with 10,000–50,000 conversations;
-- summarising very long event logs with AI;
-- picking cheaper or stronger models by role;
-- several watchers sharing the work.
-
-**Decided against:**
-- rewriting the request before planning (requests are short);
-- splitting emails into chunks (emails are short);
-- putting email text or prompts into traces (privacy);
-- features outside the Email seat (agent-to-agent protocols, chat channels, web search).
-
-## 21. Where to read more
-
-| Document | What it explains |
-|---|---|
-| [docs/README.md](docs/README.md) | the index of every document |
-| [docs/project/gap-report.md](docs/project/gap-report.md) | AgentSwitch's email app compared with AI email products, and which gaps an agent can close |
-| [docs/project/orchestrator.md](docs/project/orchestrator.md) | the agent's design in depth, and the list of every feature (built, planned, future, not taken) |
-| [docs/project/code-guide.md](docs/project/code-guide.md) | every file, script and data file, one line each |
-| [docs/project/plan.md](docs/project/plan.md) | how it was built, stage by stage, with the evidence |
-| [docs/project/pending.md](docs/project/pending.md) | what is still open, and suggested test cases |
-| [docs/bugs/revision-12-findings.md](docs/bugs/revision-12-findings.md) | every bug and workaround found while building it |
-| [docs/bugs/README.md](docs/bugs/README.md) | the platform bugs we found and filed |
-| [docs/glossary.md](docs/glossary.md) | every term used in the docs, in plain words |
+| [docs/architecture.md](docs/architecture.md) | how the pieces fit: agent, platform, harness |
+| [docs/known-issues.md](docs/known-issues.md) | platform bugs and workarounds, our own bugs found and fixed, known limits |
+| [docs/gap-report.md](docs/gap-report.md) | AgentSwitch's email app compared with AI email products |

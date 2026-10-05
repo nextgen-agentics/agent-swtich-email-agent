@@ -28,13 +28,14 @@ from tenacity import (
 from email_agent.contracts.agent import OurMailbox
 from email_agent.contracts.mcp import ToolOutcome
 from email_agent.contracts.mirror import EntitySync, SyncReport
-from email_agent.contracts.platform import EmailMessage, EmailThread, ListPage, list_page
+from email_agent.contracts.platform import EmailMessage, EmailThread, ListPage, Row, list_page
 from email_agent.contracts.tool_args import TOOL_ARGS
 from email_agent.mailbox.store import MailboxStore
 from email_agent.platform.mcp_session import McpSession
 
 PAGE = 1000                         # the platform's largest page
 OVERLAP = timedelta(minutes=10)
+VERIFY_MISSING = 200                # a full pass re-reads up to this many rows it did not see before deleting them
 TABLES: list[tuple[str, str, type]] = [("EmailThread", "EmailThread.list", EmailThread),
                                        ("EmailMessage", "EmailMessage.list", EmailMessage)]
 
@@ -102,6 +103,8 @@ class MailboxSync:
             oldest = min((t for r in page.data if (t := _ts(r.updated_at)) is not None), default=None)
             if cutoff is not None and oldest is not None and oldest < cutoff:
                 break
+        if full_pass:
+            rows += await self._still_there(entity, model, mb, {r.id for r in rows})
         if entity == "EmailThread":
             changed_ids = await asyncio.to_thread(self.store.upsert_threads, rows)
             changed, touched = len(changed_ids), set(changed_ids)
@@ -117,6 +120,32 @@ class MailboxSync:
         return EntitySync(entity=entity, mailbox=mb.email, full=full_pass, calls=calls, fetched=len(rows),
                           changed=changed, deleted=deleted, watermark_before=state.watermark,
                           watermark_after=watermark), touched
+
+    async def _still_there(self, entity: str, model: type[Row], mb: OurMailbox, seen: set[str]) -> list[Any]:
+        """Rows the copy has but the full pass did not see. The pass pages by `updated_at` with offsets, so a row that
+        changes while it runs moves to a page already read and is skipped; it must not be deleted for that. Each one is
+        read again: kept (fresh) when the platform still has it or cannot say, deleted only when it is really gone.
+        Past VERIFY_MISSING the pass is a mass deletion, which a page shift never looks like."""
+        missing = sorted(self.store.ids_in(entity, mb.id) - seen)
+        if not missing or len(missing) > VERIFY_MISSING:
+            return []
+        back = []
+        for row_id in missing:
+            got = await self.mcp.call(f"{entity}.get", TOOL_ARGS[f"{entity}.get"].model_validate({"id": row_id}))
+            if got.ok:
+                data = got.data()
+                row = model.model_validate(data["data"] if isinstance(data, dict) and isinstance(data.get("data"), dict)
+                                           else data)
+                if getattr(row, "mailbox_id", None) in (mb.id, None):
+                    back.append(row)
+            elif got.error is None or got.error.kind not in ("tool", "jsonrpc"):
+                back.append(self._kept(entity, mb, row_id))       # unknown (timeout): keep what we have
+        return [r for r in back if r is not None]
+
+    def _kept(self, entity: str, mb: OurMailbox, row_id: str) -> Any:
+        if entity == "EmailThread":
+            return self.store.threads([mb.id], ids={row_id}).get(row_id)
+        return self.store.message(row_id)
 
     async def _page(self, tool: str, model: type, mailbox_id: str, offset: int) -> ListPage:
         args = TOOL_ARGS[tool].model_validate({"mailbox_id": mailbox_id, "sort_by": "updated_at", "sort_order": "desc",

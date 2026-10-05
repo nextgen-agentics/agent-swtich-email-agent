@@ -154,6 +154,9 @@ class RunPlanner:
                 break
             except PlanRejected as e:
                 rejected.append(str(e))
+            except BudgetExceeded as e:              # the model-call budget: a limit reached, not a planner failure
+                self.budget_hit = str(e)
+                return GraphPatch(finish=True, reason=f"model-call budget used up: {e}", metadata={"budget": "llm_calls"})
         else:
             self.rt.log.step(PlanStep(iter=self.rt.round, trigger=trigger, goals=new_goals, rejected=rejected,
                                       reason="no valid plan after repairs"))

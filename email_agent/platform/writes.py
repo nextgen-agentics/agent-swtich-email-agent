@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextvars import ContextVar
 from typing import Any, Awaitable, Callable
 
@@ -38,6 +39,7 @@ from email_agent.mailbox.store import MailboxStore
 from email_agent.platform.mcp_session import McpSession
 from email_agent.platform.rest import RestClient
 
+log = logging.getLogger(__name__)
 BATCH_FROM_COPY = 3                         # more rows than this: guard from a freshly synced local copy
 CURRENT_NODE: ContextVar[str] = ContextVar("current_node", default="run")   # set by each graph worker
 
@@ -85,7 +87,9 @@ class WritePath:
         if len(updates) > BATCH_FROM_COPY:
             if self.refresh:
                 await self.refresh()
-            rows = {k: v.model_dump(mode="json") for k, v in self.mirror.threads([m.id for m in self.ctx.mailboxes]).items()}
+            rows = {k: v.model_dump(mode="json")
+                    for k, v in self.mirror.threads([m.id for m in self.ctx.mailboxes],
+                                                     ids={str(u) for u in updates}).items()}
         # A TaskGroup, not gather: if the node dies (a crash, a cancel), every sibling write stops with it instead of
         # running on in the background against a closed run file.
         async with asyncio.TaskGroup() as tg:
@@ -135,7 +139,10 @@ class WritePath:
             rec = WriteRecord(tool=tool, entity=tool_entity(tool), row_id=row_id, fields=changed, before=before, key=key)
             self.on_write(rec)
             if tool == "EmailThread.update" and row_id:
-                self.mirror.apply_thread_update(row_id, changed, self._ours())
+                try:
+                    self.mirror.apply_thread_update(row_id, changed, self._ours())
+                except Exception:  # noqa: BLE001 — the write happened; a stale local copy is fixed by the next sync
+                    log.exception("the local copy did not take the update of %s", row_id)
             return WriteOutcome(tool=tool, row_id=row_id, ok=True, record=rec, receipt=receipt)
 
     def mcp_run_id(self) -> str:

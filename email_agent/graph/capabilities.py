@@ -29,7 +29,8 @@ from email_agent.platform.action import LOCAL_TOOLS, READ_OPS
 GRAPH_CAPABILITIES = {"judge_threads", "answer", "refuse"}
 INTERNAL = {"judge_shard", "join_verdicts", "validate_verdicts", "apply_writes"}
 
-JUDGE_TIMEOUT_S = 60.0          # judge_threads itself only selects and fans out
+JUDGE_TIMEOUT_S = 900.0         # selects and fans out, but the run's first mailbox sync happens inside it (a cold
+                                # sync of a 50,000-message mailbox is about 60 calls at ~1 s each)
 SHARD_TIMEOUT_S = 900.0         # one LLM call (the route may wait and fall back) + a repair retry
 WRITES_TIMEOUT_S = 1800.0       # about 1 s per write on this platform
 

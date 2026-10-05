@@ -125,12 +125,15 @@ class OpenAICompatClient:
     """W&B Inference (or any OpenAI-compatible endpoint) behind the same chat() interface.
 
     Reasoning models (e.g. zai-org/GLM-5.3-Flash) think before answering and that counts against
-    max_tokens; a reply cut off by the limit is retried once with double the budget."""
+    max_tokens; a reply cut off by the limit is retried once with double the budget. With `thinking=False` the model is
+    asked not to reason (chat_template_kwargs.enable_thinking=false), where it allows that."""
 
     def __init__(self, model: str, api_key: str, base_url: str, project: str | None = None, max_tokens: int = 16000,
-                 http: openai.AsyncOpenAI | None = None):
+                 http: openai.AsyncOpenAI | None = None, thinking: bool = True):
         self.model = model
         self.max_tokens = max_tokens
+        self.thinking = thinking
+        self._thinking_flag_ok = True                                # set False if the endpoint refuses it once
         headers = {"OpenAI-Project": project} if project else {}
         self._client = http or openai.AsyncOpenAI(api_key=api_key, base_url=base_url, default_headers=headers,
                                                   max_retries=0)    # our own retries and the route decide
@@ -148,6 +151,8 @@ class OpenAICompatClient:
                 system += "\n\nAnswer with one JSON object matching this JSON schema:\n" + json.dumps(req.response_schema)
         kw["messages"] = [{"role": "system", "content": system}] + [
             {"role": "assistant" if m.role == "model" else "user", "content": m.text} for m in req.messages]
+        if not self.thinking and self._thinking_flag_ok:
+            kw["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
         return kw
 
     async def _create(self, req: LlmRequest, max_tokens: int):
@@ -161,6 +166,11 @@ class OpenAICompatClient:
                     if req.response_schema and self._json_schema_ok and "response_format" in str(e):
                         self._json_schema_ok = False            # fall back to json_object + schema in the prompt
                         log.warning("⏳ %s refused json_schema answers: using json_object from now on", self.model)
+                        return await self._client.chat.completions.create(**self._kwargs(req, max_tokens))
+                    if not self.thinking and self._thinking_flag_ok and any(
+                            w in str(e) for w in ("chat_template_kwargs", "enable_thinking")):
+                        self._thinking_flag_ok = False          # this model cannot switch reasoning off: ask without
+                        log.warning("⏳ %s refused enable_thinking=false: asking without it from now on", self.model)
                         return await self._client.chat.completions.create(**self._kwargs(req, max_tokens))
                     raise
 
@@ -433,7 +443,7 @@ def build_route(settings: Settings) -> RoutedLlm:
                                                    base_url=settings.openai_base_url, default_headers=headers,
                                                    max_retries=0, timeout=settings.llm_timeout_s)
             client = OpenAICompatClient(model, "", settings.openai_base_url, max_tokens=settings.llm_max_tokens,
-                                        http=shared_openai)
+                                        http=shared_openai, thinking=settings.wandb_thinking)
         options.append(Option(provider=provider, model=model, key_slot=slot, client=client))
     # ceiling = every try a client may make for one reply (2 quick tries × the doubled-budget retry) + margin
     return RoutedLlm(options, settings.llm_wait_max_s, settings.llm_breaker_s, route_text(settings),
