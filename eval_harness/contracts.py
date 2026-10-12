@@ -1,4 +1,4 @@
-"""Harness contracts: the correct answers (ground truth) and, later, tasks and verdicts.
+"""Contracts of our test suite (eval_harness): the correct answers (ground truth), tasks, verdicts, results.json.
 
 Ground truth is decided by you, in the web UI. The script only proposes candidates;
 a task whose ground truth still has undecided items is scored `unevaluated`, never a pass.
@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictBool, model_validator
 
 Proposal = Literal["needs_reply", "fyi_or_thanks", "unclear", "waiting_on_them", "no_inbound"]
 
@@ -45,7 +45,7 @@ class GroundTruth(BaseModel):
         return c.mailbox or (self.our_mailboxes[0] if len(self.our_mailboxes) == 1 else None)
 
 
-# ── answer keys for the other features (harness/ground_truth/<feature>/<instance>.yaml) ──────────────────────
+# ── answer keys for the other features (eval_harness/ground_truth/<feature>/<instance>.yaml) ──────────────────────
 
 class AnswerKey(BaseModel):
     """What every answer-key file shares. The script proposes, you decide; null = undecided = unevaluated."""
@@ -140,6 +140,7 @@ class Task(BaseModel):
     predicates: list[PredicateSpec] = Field(default_factory=list)   # … or several; the verdict is the worst
     as_of: date | None = None              # pin "today"; None = the real date
     mailboxes: list[str] | None = None     # addresses to work in; None = the instance default (config.INSTANCES)
+    max_minutes: float | None = Field(default=None, gt=0)   # official run: this task's time cap (None = the default)
     note: str | None = None
 
     @model_validator(mode="after")
@@ -156,7 +157,7 @@ class TaskFile(BaseModel):
 
 
 class ThreadFlag(BaseModel):
-    """The state of one conversation the checks look at, as the harness read it from the database (the name is
+    """The state of one conversation the checks look at, as our test suite read it from the database (the name is
     from when only flags were checked; saved runs from before 2026-10-03 hold just the two flag fields)."""
 
     flag_status: str | None = None
@@ -169,7 +170,7 @@ class ThreadFlag(BaseModel):
 
 
 class SavedRun(BaseModel):
-    """Written to harness_runs/<batch>/<task>.json right after the run — before any scoring."""
+    """Written to eval_runs/<batch>/<task>.json right after the run — before any scoring."""
 
     task: Task
     run_id: str | None = None
@@ -220,3 +221,23 @@ class ScoreReport(BaseModel):
         for v in self.verdicts:
             out[v.status] += 1
         return out
+
+
+# ── the official run's results file (Revision 18; docs/project/official-runs.md) ──────────────────────────────
+
+class ResultTask(BaseModel):
+    """One row of results.json, in the AgentSwitch runner's format: our verdict approve → passed; revise and
+    unevaluated → not passed (unevaluated is never a pass)."""
+
+    id: str = Field(min_length=1)                     # "<instance>:<task id>"
+    title: str = Field(min_length=1)
+    passed: StrictBool                                # true or false only ("yes", 1 … are refused, as the runner does)
+    score: float | None = Field(default=None, ge=0.0, le=1.0)
+    evidence: str = Field(default="", max_length=500)
+
+
+class ResultsFile(BaseModel):
+    """results.json: what the AgentSwitch runner reads after an official run (1 to 200 tasks)."""
+
+    tasks: list[ResultTask] = Field(min_length=1, max_length=200)
+    summary: str

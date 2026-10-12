@@ -1,6 +1,7 @@
 """REST access to AgentSwitch — only for what MCP does not offer.
 
-    POST /api/auth/login              → bearer token (MCP needs it)
+    POST /api/auth/login              → bearer token (MCP needs it); on an official run the AgentSwitch runner
+                                        gives the token instead (AGENTSWITCH_TOKEN) and no password exists
     GET  /api/auth/me                 → who we are (Me)
     GET  /api/accounting/display-locale → country, currency, formats (RegimeLocale)
     GET  /api/schemas, /api/agent/tools, /api/mcp/tools, /openapi.json
@@ -110,6 +111,8 @@ class RestClient:
         stale = self._token
         resp = self._send(method, path, json_body=json_body, params=params, auth=auth)
         if auth and resp.status_code == 401:
+            if self._given_token() is not None:     # an official run's seat token: no password to log in again with
+                self.login(force=True)              # raises "the seat token was refused"
             with self._login_lock:
                 if self._token == stale:
                     self.login(force=True)
@@ -156,7 +159,21 @@ class RestClient:
         ))
 
     # ── auth ─────────────────────────────────────────────────────────────────
+    def _given_token(self) -> str | None:
+        """AGENTSWITCH_TOKEN, when it is for this instance (an official run gives one token per instance it runs)."""
+        given, wanted = self.settings.agentswitch_token, self.settings.agentswitch_instance
+        if given is None or not given.get_secret_value() or (wanted and wanted != self.instance.name):
+            return None
+        return given.get_secret_value()
+
     def login(self, force: bool = False) -> str:
+        if (given := self._given_token()) is not None:
+            # No password to fall back on: a refused seat token is reported, never "fixed" by logging in again.
+            if force:
+                raise McpCallError(McpError(kind="auth", http_status=401, message=(
+                    f"the seat token (AGENTSWITCH_TOKEN) was refused by {self.instance.base_url}")))
+            self._token = given
+            return given
         if not force and (cached := self._load_cached()):
             self._token = cached
             return cached
@@ -175,8 +192,9 @@ class RestClient:
         return self._token or self.login()
 
     def valid_token(self) -> str:
-        """A token that works right now (re-login if the cached one expired)."""
-        if self.get("/api/auth/me").status_code == 200:
+        """A token that works right now (re-login if the cached one expired). A seat token from the AgentSwitch runner
+        is used as it is: a 401 has already been reported by `request`, and anything else is for MCP to answer."""
+        if self.get("/api/auth/me").status_code == 200 or self._given_token() is not None:
             return self.token
         return self.login(force=True)
 

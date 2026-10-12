@@ -67,7 +67,7 @@ class ConsoleView:
     def __init__(self, console: Console | None = None, verbose: bool = False, prefix: str = ""):
         self.console = console or Console(stderr=True, highlight=False)
         self.verbose = verbose
-        self.prefix = prefix                      # the harness puts the task id here
+        self.prefix = prefix                      # the test suite puts the task id here
         self._llm: LlmStep | None = None          # the LLM call whose numbers go on the next planner line
         self._mark = time.monotonic()             # when the last line was printed (action timing)
         self._waits: dict[object, tuple[str, float]] = {}   # model calls in flight (label, start)

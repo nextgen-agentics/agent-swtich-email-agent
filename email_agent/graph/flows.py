@@ -53,7 +53,7 @@ def matches(search: str | None, *texts: str | None) -> bool:
 
 
 def price_memory_content(run_id: str, a: PriceAgreementInput) -> str:
-    """The AgentMemory text for one agreed price. Its first line is machine-readable: the harness parses it, and
+    """The AgentMemory text for one agreed price. Its first line is machine-readable: our test suite parses it, and
     BUG-014 (memory text cannot be searched) means checks find our rows by run id."""
     first = (f"price-agreement | run={run_id} | thread={a.thread_id} | message={a.agreement_message_id}"
              f" | ref={a.reference or '-'} | qty={a.quantity:g} | unit={a.unit_price:.2f} | total={a.total:.2f}"

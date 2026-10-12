@@ -2,7 +2,7 @@
 
 The MCP client wraps failures in exception groups (anyio task groups), so the first thing a
 person sees is "unhandled errors in a TaskGroup". `describe` digs out the real causes. Used by
-the agent (RunError in final.json) and the harness (SavedRun.error).
+the agent (RunError in final.json) and our test suite (SavedRun.error).
 """
 
 from __future__ import annotations

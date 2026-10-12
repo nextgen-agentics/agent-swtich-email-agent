@@ -1,4 +1,4 @@
-"""What the harness reads from the database (MCP and REST, read-only, typed). The harness never reads the agent's text.
+"""What our test suite reads from the database (MCP and REST, read-only, typed). Our test suite never reads the agent's text.
 
 `snapshot` reads, in one session, every table the checks look at. `our_changes_since` finds every row our login
 created or changed after a moment on the server's clock (the platform stores UTC without a zone mark, checked
@@ -28,7 +28,7 @@ from email_agent.contracts.platform import (
 )
 from email_agent.platform.mcp_session import McpSession
 from email_agent.platform.rest import RestClient
-from harness.contracts import ThreadFlag
+from eval_harness.contracts import ThreadFlag
 
 CLOCK_MARGIN = timedelta(seconds=2)
 LIMIT = 1000

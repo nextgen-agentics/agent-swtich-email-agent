@@ -6,7 +6,7 @@ The page is one file: the RunView as JSON plus the page's own style and script (
 a CDN, and every table still shows without them. agent.run writes it at the end of every run; for saved runs:
 
     uv run email-view runs/<run_id> [runs/<run_id> …] [--open]
-    uv run email-view harness_runs/<batch>          # every run of a batch (harness-score also writes the batch page)
+    uv run email-view eval_runs/<batch>          # every run of a batch (eval-score also writes the batch page)
 """
 
 from __future__ import annotations
@@ -353,7 +353,7 @@ def page_at_run_end(run_dir: Path) -> Path | None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Write view.html (a web page of the run) for saved runs")
-    ap.add_argument("run_dirs", nargs="+", type=Path, help="run folders, or a harness batch folder (all its runs)")
+    ap.add_argument("run_dirs", nargs="+", type=Path, help="run folders, or a test-suite batch folder (all its runs)")
     ap.add_argument("--open", action="store_true", help="open the page(s) in the browser")
     args = ap.parse_args()
     for d in args.run_dirs:

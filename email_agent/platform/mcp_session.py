@@ -14,7 +14,7 @@ How it connects (verified by scripts/platform/mcp_sdk_spike.py):
 errors (unknown tool, invalid arguments) and sets is_error for tool errors —
 both become ToolOutcome(ok=False, error=...), which the agent can read.
 
-Every wait has a time limit (Stage 7, after a harness batch stalled for 8 minutes between two tasks): a call
+Every wait has a time limit (Stage 7, after a test-suite batch stalled for 8 minutes between two tasks): a call
 (mcp_call_timeout_s), opening the session (mcp_open_timeout_s: the token check, run in a thread so it cannot block the
 event loop, plus the SDK's handshake) and closing it (mcp_close_timeout_s: the SDK's session DELETE). Before this, the
 open and close waited on httpx's 300 s read timeout and on the synchronous REST token check (up to 3 tries × 60 s),

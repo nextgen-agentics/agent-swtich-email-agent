@@ -77,7 +77,7 @@ class MailboxOverviewInput(BaseModel):
         False, description="Only conversations whose newest real message is from them and unanswered.")
 
 
-# Why a goal was refused — data, so the harness can check a refusal without reading the answer text.
+# Why a goal was refused — data, so our test suite can check a refusal without reading the answer text.
 RefusalReason = Literal["out_of_seat", "not_our_mailbox", "not_permitted", "no_evidence", "unknown_record"]
 # out_of_seat: needs another app's data (salaries, invoices) · not_our_mailbox: a mailbox our login does not own
 # not_permitted: an action this seat must not do (send mail, delete shared mail) · no_evidence: the data does not
@@ -270,10 +270,10 @@ class RunRequest(BaseModel):
     today: date | None = None               # --as-of; None = the real date
     mailboxes: list[str] | None = None      # --mailbox; None = the instance default
     full_sync: bool = False                 # --full-sync: re-read the whole mailbox into the local copy
-    cache: bool = False                     # reuse saved verdicts for unchanged conversations (CLI default; not harness)
+    cache: bool = False                     # reuse saved verdicts for unchanged conversations (CLI default; not the test suite)
     approve_writes: bool = False            # --approve-writes: stop before any platform write until you say yes
     history: bool = False                   # show the last runs on these mailboxes to the planner (CLI default; not
-                                            # harness: scores must measure the model, not what earlier runs did)
+                                            # test suite: scores must measure the model, not what earlier runs did)
     threads: list[str] | None = None        # only these conversations may be judged or written (the watcher's
                                             # runs: code-enforced, whatever the request text says)
     search: Literal["fts", "hybrid"] | None = None   # --search; None = the SEARCH setting (Stage 9)

@@ -9,7 +9,7 @@ which the old Decision step used, was removed after Stage 9: every graph role an
 the other provider's: Gemini = GEMINI_MODEL on key 1, then keys 2–5 (failover only, never rotated for load);
 W&B = each model in WANDB_MODELS. Each call goes to the first usable option. A failure is classified, and the
 option rests (rate limit, daily quota, server trouble), dies (bad key, unknown model), or is skipped for this
-call only (ran out of thinking budget). Health is shared by the whole process, so a harness batch carries it from
+call only (ran out of thinking budget). Health is shared by the whole process, so a test-suite batch carries it from
 task to task. Every reply records who answered (provider, model, key SLOT — never a key).
 """
 
@@ -121,12 +121,52 @@ def _openai_server_trouble(e: BaseException) -> bool:
     return isinstance(e, (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError))
 
 
+# How a JSON answer is asked for, strictest first; an endpoint that refuses one is asked the next way from then on.
+JSON_MODES = ("json_schema", "json_object", "prompt")
+_JSON_REFUSED = ("response_format", "response format", "json_schema", "json_object", "structured output",
+                 "guided_json", "guided decoding")
+_THINKING_REFUSED = ("chat_template_kwargs", "enable_thinking")
+
+
+def _max_tokens_refused(text: str) -> bool:
+    """A 400 about the size of the reply budget (the other team's live finding, 2026-10-09: a model whose output limit
+    is smaller than what was asked refuses the whole call)."""
+    return "max_tokens" in text or "max_completion_tokens" in text or (
+        "token" in text and any(w in text for w in ("maximum", "max ", "limit", "exceed", "too large", "context")))
+
+
+def extract_json(text: str) -> str:
+    """The JSON object in a reply: the reply itself when it is JSON, else the inside of a ```json fence, else the text
+    from the first `{` to the last `}`. Unchanged when none of them parses (the caller's contract reports it)."""
+    stripped = text.strip()
+    candidates = [stripped]
+    if "```" in stripped:
+        inner = stripped.split("```", 2)[1] if stripped.count("```") >= 2 else stripped.split("```", 1)[1]
+        candidates.append(inner[4:] if inner.lower().startswith("json") else inner)
+    first, last = stripped.find("{"), stripped.rfind("}")
+    if 0 <= first < last:
+        candidates.append(stripped[first:last + 1])
+    for candidate in candidates:
+        try:
+            json.loads(candidate)
+        except ValueError:
+            continue
+        return candidate.strip()
+    return text
+
+
 class OpenAICompatClient:
-    """W&B Inference (or any OpenAI-compatible endpoint) behind the same chat() interface.
+    """W&B Inference (or any OpenAI-compatible endpoint, e.g. the AgentSwitch runner's model) behind the same chat()
+    interface.
 
     Reasoning models (e.g. zai-org/GLM-5.3-Flash) think before answering and that counts against
     max_tokens; a reply cut off by the limit is retried once with double the budget. With `thinking=False` the model is
-    asked not to reason (chat_template_kwargs.enable_thinking=false), where it allows that."""
+    asked not to reason (chat_template_kwargs.enable_thinking=false), where it allows that.
+
+    An endpoint that refuses part of a request (HTTP 400) is asked again without it, once, and never sent it again:
+    the reasoning flag; `max_tokens` (Revision 19: the server's own default applies); and the JSON mode, which steps
+    down json_schema → json_object → the schema in the prompt only. A JSON answer is taken out of a code fence or
+    surrounding text when needed."""
 
     def __init__(self, model: str, api_key: str, base_url: str, project: str | None = None, max_tokens: int = 16000,
                  http: openai.AsyncOpenAI | None = None, thinking: bool = True):
@@ -134,52 +174,68 @@ class OpenAICompatClient:
         self.max_tokens = max_tokens
         self.thinking = thinking
         self._thinking_flag_ok = True                                # set False if the endpoint refuses it once
+        self._max_tokens_ok = True                                   # set False if the endpoint refuses it once
         headers = {"OpenAI-Project": project} if project else {}
         self._client = http or openai.AsyncOpenAI(api_key=api_key, base_url=base_url, default_headers=headers,
                                                   max_retries=0)    # our own retries and the route decide
-        self._json_schema_ok = True                                  # set False if the endpoint refuses it once
+        self._json_mode = JSON_MODES[0]                              # steps down if the endpoint refuses it
 
     def _kwargs(self, req: LlmRequest, max_tokens: int) -> dict[str, Any]:
         system = req.system
-        kw: dict[str, Any] = {"model": self.model, "temperature": req.temperature, "max_tokens": max_tokens}
+        kw: dict[str, Any] = {"model": self.model, "temperature": req.temperature}
+        if self._max_tokens_ok:
+            kw["max_tokens"] = max_tokens
         if req.response_schema:
-            if self._json_schema_ok:
+            if self._json_mode == "json_schema":
                 kw["response_format"] = {"type": "json_schema", "json_schema": {
                     "name": req.purpose, "schema": req.response_schema, "strict": False}}
             else:
-                kw["response_format"] = {"type": "json_object"}
-                system += "\n\nAnswer with one JSON object matching this JSON schema:\n" + json.dumps(req.response_schema)
+                if self._json_mode == "json_object":
+                    kw["response_format"] = {"type": "json_object"}
+                system += ("\n\nAnswer with one JSON object matching this JSON schema, and nothing else:\n"
+                           + json.dumps(req.response_schema))
         kw["messages"] = [{"role": "system", "content": system}] + [
             {"role": "assistant" if m.role == "model" else "user", "content": m.text} for m in req.messages]
         if not self.thinking and self._thinking_flag_ok:
             kw["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
         return kw
 
+    def _drop_refused(self, req: LlmRequest, e: openai.BadRequestError) -> bool:
+        """Stop sending the part of the request this 400 refuses. False = nothing left to drop (a real error)."""
+        text = str(e).lower()
+        if not self.thinking and self._thinking_flag_ok and any(w in text for w in _THINKING_REFUSED):
+            self._thinking_flag_ok = False              # this model cannot switch reasoning off: ask without
+            log.warning("⏳ %s refused enable_thinking=false: asking without it from now on", self.model)
+            return True
+        if self._max_tokens_ok and _max_tokens_refused(text):
+            self._max_tokens_ok = False                 # the server's own reply budget applies from now on
+            log.warning("⏳ %s refused max_tokens: asking without it from now on", self.model)
+            return True
+        if req.response_schema and self._json_mode != JSON_MODES[-1] and any(w in text for w in _JSON_REFUSED):
+            self._json_mode = JSON_MODES[JSON_MODES.index(self._json_mode) + 1]
+            log.warning("⏳ %s refused that JSON mode: using %s from now on", self.model, self._json_mode)
+            return True
+        return False
+
     async def _create(self, req: LlmRequest, max_tokens: int):
         async for attempt in AsyncRetrying(stop=stop_after_attempt(QUICK_TRIES), wait=wait_exponential(1, max=4),
                                            before_sleep=_log_retry, retry=retry_if_exception(_openai_server_trouble),
                                            reraise=True):
             with attempt:
-                try:
-                    return await self._client.chat.completions.create(**self._kwargs(req, max_tokens))
-                except openai.BadRequestError as e:
-                    if req.response_schema and self._json_schema_ok and "response_format" in str(e):
-                        self._json_schema_ok = False            # fall back to json_object + schema in the prompt
-                        log.warning("⏳ %s refused json_schema answers: using json_object from now on", self.model)
+                for _ in range(len(JSON_MODES) + 2):    # each refused part is dropped once, then the error stands
+                    try:
                         return await self._client.chat.completions.create(**self._kwargs(req, max_tokens))
-                    if not self.thinking and self._thinking_flag_ok and any(
-                            w in str(e) for w in ("chat_template_kwargs", "enable_thinking")):
-                        self._thinking_flag_ok = False          # this model cannot switch reasoning off: ask without
-                        log.warning("⏳ %s refused enable_thinking=false: asking without it from now on", self.model)
-                        return await self._client.chat.completions.create(**self._kwargs(req, max_tokens))
-                    raise
+                    except openai.BadRequestError as e:
+                        if not self._drop_refused(req, e):
+                            raise
+                return await self._client.chat.completions.create(**self._kwargs(req, max_tokens))
 
     async def chat(self, req: LlmRequest) -> LlmReply:
         started = time.perf_counter()
         resp = await self._create(req, self.max_tokens)
         choice = resp.choices[0]
         # Cut off by the token limit: the text (if any) is half an answer, never a whole one.
-        if choice.finish_reason == "length":
+        if choice.finish_reason == "length" and self._max_tokens_ok:
             log.warning("⏳ %s ran out of its %d-token budget before finishing: retrying once with %d",
                         self.model, self.max_tokens, self.max_tokens * 2)
             resp = await self._create(req, self.max_tokens * 2)   # the thinking used up the budget: once more
@@ -187,12 +243,14 @@ class OpenAICompatClient:
             if choice.finish_reason == "length":
                 raise BudgetExceeded(f"{self.model} used all {self.max_tokens * 2} tokens without finishing its "
                                      "reply; raise LLM_MAX_TOKENS in .env or choose another model")
+        if choice.finish_reason == "length":            # the server's own budget (max_tokens refused) ran out too
+            raise BudgetExceeded(f"{self.model} ran out of the server's reply budget without finishing its reply")
         msg = choice.message
         u = resp.usage
         details = getattr(u, "completion_tokens_details", None) if u else None
         return LlmReply(
             model=self.model,
-            text=(msg.content or "").strip(),
+            text=extract_json(msg.content or "") if req.response_schema else (msg.content or "").strip(),
             finish_reason=choice.finish_reason,
             usage=Usage(input_tokens=(u.prompt_tokens or 0) if u else 0,
                         output_tokens=(u.completion_tokens or 0) if u else 0,
@@ -319,7 +377,7 @@ def plan_route(settings: Settings) -> list[tuple[Provider, str, int | None]]:
         if provider == "gemini":
             slots = [slot for slot, _ in settings.gemini_keys()]
             planned += [("gemini", m, slot) for m in settings.models_for("gemini") for slot in slots]
-        elif settings.wandb_api_key is not None and settings.wandb_api_key.get_secret_value():
+        elif settings.openai_key() is not None:
             planned += [("openai", m, None) for m in settings.models_for("openai")]
     return planned[:1] if not settings.fallback else planned
 
@@ -344,7 +402,7 @@ class RoutedLlm:
     def __init__(self, options: list[Option], wait_max_s: float = 120.0, breaker_s: float = 60.0, text: str = "",
                  call_ceiling_s: float = 900.0):
         if not options:
-            raise LlmError("no LLM key is set: add GEMINI_API_KEY and/or WANDB_API_KEY to .env")
+            raise LlmError("no LLM key is set: add GEMINI_API_KEY and/or WANDB_API_KEY (or OPENAI_API_KEY) to .env")
         self.options, self.wait_max_s, self.breaker_s, self.text = options, wait_max_s, breaker_s, text
         # A hard limit per option per call: SDK timeouts measure the gap between bytes, so a server that keeps a
         # connection open without finishing can slip past them (two W&B calls hung for 50+ minutes, 2026-10-03).
@@ -435,11 +493,12 @@ def build_route(settings: Settings) -> RoutedLlm:
             client = GeminiClient(model, keys[slot].get_secret_value(), settings.gemini_thinking_level,
                                   settings.llm_timeout_s)
         else:
-            if settings.wandb_api_key is None:
-                raise ValueError(f"{model} is on the route but WANDB_API_KEY is not set")
+            openai_key = settings.openai_key()
+            if openai_key is None:
+                raise ValueError(f"{model} is on the route but neither WANDB_API_KEY nor OPENAI_API_KEY is set")
             if shared_openai is None:
                 headers = {"OpenAI-Project": settings.wandb_project} if settings.wandb_project else {}
-                shared_openai = openai.AsyncOpenAI(api_key=settings.wandb_api_key.get_secret_value(),
+                shared_openai = openai.AsyncOpenAI(api_key=openai_key.get_secret_value(),
                                                    base_url=settings.openai_base_url, default_headers=headers,
                                                    max_retries=0, timeout=settings.llm_timeout_s)
             client = OpenAICompatClient(model, "", settings.openai_base_url, max_tokens=settings.llm_max_tokens,
@@ -451,9 +510,9 @@ def build_route(settings: Settings) -> RoutedLlm:
 
 
 def make_llm(settings: Settings) -> RoutedLlm:
-    """One route per settings for the whole process, so option health carries from run to run (harness batches)."""
+    """One route per settings for the whole process, so option health carries from run to run (test-suite batches)."""
     key = (tuple(plan_route(settings)), settings.llm_max_tokens, settings.llm_wait_max_s, settings.llm_breaker_s,
-           settings.gemini_thinking_level, settings.llm_timeout_s)
+           settings.gemini_thinking_level, settings.llm_timeout_s, settings.openai_base_url)
     if key not in _ROUTES:
         _ROUTES[key] = build_route(settings)
     return _ROUTES[key]

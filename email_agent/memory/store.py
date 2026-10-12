@@ -3,7 +3,7 @@
 Stage 4: the verdict cache (memory layer 3, "derived knowledge"). A shard's verdict on a conversation is kept under a
 key made of everything the verdict depends on: the conversation's content hash, the skill, the skill file's and the
 judging prompt's own hashes, and — for date-bound skills — today. Change any of them and the key changes, so a stale
-verdict is never reused. A run with the cache on judges only conversations that changed. Harness runs keep it off, so
+verdict is never reused. A run with the cache on judges only conversations that changed. Test-suite runs keep it off, so
 their scores measure the model, not the cache.
 
 Stage 7: long-term memory (layer 2) and episodes (layer 7), adapted from S17 `core/memory/store.py`:

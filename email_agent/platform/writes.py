@@ -13,7 +13,7 @@ Every write — a model's single tool call, a batch tool's rows, a fan-out's wri
   4. dry run: recorded as a dry-run write, nothing sent, the local copy left alone
   5. send: MCP; or REST `PUT /api/<Entity>/<id>` when a field is set back to null (the MCP schema refuses null —
      checked live 2026-10-04)
-  6. record: WriteRecord to writes.jsonl (what the harness and undo_run.py read); an accepted conversation update is
+  6. record: WriteRecord to writes.jsonl (what our test suite and undo_run.py read); an accepted conversation update is
      copied into the local copy so later reads in the run see it; a sent write is also added to the book's record of
      our writes (agent.py → event_store), so the watcher never answers a change we made
 A run scoped to some conversations (the watcher's, Stage 8) may not write any other conversation.

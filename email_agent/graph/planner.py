@@ -375,7 +375,7 @@ class RunPlanner:
                 dropped.append(f"{t.id} (same as {twin.id})")
                 twins[t.id] = twin.id
                 continue
-            # a dependency on a task dropped as a repeat means its twin (Stage 7 harness: answer_g1_final waited on
+            # a dependency on a task dropped as a repeat means its twin (Stage 7 test-suite run: answer_g1_final waited on
             # judge_g1_retry, a repeat of judge_g1, and every proposal was rejected as "unknown node")
             after = list(dict.fromkeys(twins.get(a, a) for a in t.after))
             unknown = [a for a in after if a not in known]
@@ -397,7 +397,7 @@ class RunPlanner:
                 continue
             if t.capability == "answer" and any(a.goal_id == goal.id and a.capability not in TERMINAL
                                                 and a not in auto for a in add):
-                # Stage 7 harness: an answer added with its goal's work, before any result, made the goal "busy", so
+                # Stage 7 test-suite run: an answer added with its goal's work, before any result, made the goal "busy", so
                 # the planner never saw the result and never refused (refuse-price-not-agreed: a quote request only).
                 # How a goal ends — answer or refuse — is decided once its work's result is in.
                 dropped.append(f"{t.id} (decide how goal {goal.id} ends after this round's work has a result)")

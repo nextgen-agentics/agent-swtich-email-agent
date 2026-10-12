@@ -11,7 +11,9 @@ __pycache__/
 
 # run output (large, regenerated)
 runs/
-harness_runs/
+eval_runs/
+# written by an official run (eval_harness/official.py)
+results.json
 state/
 data/raw/
 

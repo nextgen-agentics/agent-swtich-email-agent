@@ -114,10 +114,10 @@ async def run(request: str, instance: str, settings: Settings, *, today: date | 
               search: Literal["fts", "hybrid"] | None = None) -> RunOutcome:
     """`mailboxes`: addresses to work in (None = the instance default in config.INSTANCES).
     `full_sync`: re-read the whole mailbox into the local copy instead of only what changed.
-    `cache`: reuse saved verdicts for conversations that have not changed (off for the harness: scores must measure
+    `cache`: reuse saved verdicts for conversations that have not changed (off for the test suite: scores must measure
     the model, not the cache).
     `approve_writes`: stop before any platform write and wait for `resume(..., decision="approve")`.
-    `history`: the planner's first round sees the last runs on these mailboxes (off for the harness, like the cache).
+    `history`: the planner's first round sees the last runs on these mailboxes (off for the test suite, like the cache).
     `threads`: only these conversations may be judged or written (the watcher's runs; enforced by code).
     `search`: "hybrid" adds meaning-based search (Stage 9) to judge_threads(search=…) and recall_memory(query=…);
     None = the SEARCH setting (default "fts", full text only).
@@ -136,7 +136,7 @@ async def run(request: str, instance: str, settings: Settings, *, today: date | 
 
 
 def run_dir_of(run: str | Path, settings: Settings, runs_dir: Path | None = None) -> Path:
-    """A run id (looked up in runs/) or a run folder path (e.g. one inside harness_runs/<batch>/runs/)."""
+    """A run id (looked up in runs/) or a run folder path (e.g. one inside eval_runs/<batch>/runs/)."""
     path = Path(run)
     if not (path / RUN_FILE).exists():
         path = (runs_dir or settings.runs_dir) / str(run)

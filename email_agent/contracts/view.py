@@ -1,7 +1,7 @@
-"""Run-page contracts (Revision 15): everything runs/<run_id>/view.html and a harness batch's view.html show.
+"""Run-page contracts (Revision 15): everything runs/<run_id>/view.html and a test-suite batch's view.html show.
 
 The page is a projection of files the run already saved (run.sqlite, steps.jsonl, writes.jsonl, final.json,
-outcome.json, spans.jsonl, undo.jsonl). record/run_view.py builds a RunView, the page's script draws it; harness/view.py
+outcome.json, spans.jsonl, undo.jsonl). record/run_view.py builds a RunView, the page's script draws it; eval_harness/view.py
 builds a BatchView. Nothing here is read back by the agent.
 """
 

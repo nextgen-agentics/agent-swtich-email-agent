@@ -1,9 +1,9 @@
-"""A web page for one scored harness batch: harness_runs/<batch>/view.html (Revision 15).
+"""A web page for one scored test-suite batch: eval_runs/<batch>/view.html (Revision 15).
 
 A table of the batch's tasks (verdict, why, how the run ended, who answered), each linking to its run's own page
-(runs/<run_id>/view.html, written here when it is missing). harness.score writes it after report.md; to (re)make it:
+(runs/<run_id>/view.html, written here when it is missing). eval_harness.score writes it after report.md; to (re)make it:
 
-    uv run python -m harness.view harness_runs/<batch> [--open]
+    uv run python -m eval_harness.view eval_runs/<batch> [--open]
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 from email_agent.contracts.view import BatchRow, BatchView
 from email_agent.record.run_view import PAGE, page_at_run_end, render_page
-from harness.contracts import ScoreReport
+from eval_harness.contracts import ScoreReport
 
 
 def build_batch_view(batch: Path, report: ScoreReport) -> BatchView:
@@ -35,12 +35,12 @@ def build_batch_view(batch: Path, report: ScoreReport) -> BatchView:
 
 def write_batch_view(batch: Path, report: ScoreReport) -> Path:
     path = batch / PAGE
-    path.write_text(render_page(build_batch_view(batch, report), f"Harness batch {report.batch}"))
+    path.write_text(render_page(build_batch_view(batch, report), f"Test-suite batch {report.batch}"))
     return path
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Write view.html for a scored harness batch (and its runs' pages)")
+    ap = argparse.ArgumentParser(description="Write view.html for a scored test-suite batch (and its runs' pages)")
     ap.add_argument("batch", type=Path)
     ap.add_argument("--open", action="store_true", help="open the page in the browser")
     args = ap.parse_args()

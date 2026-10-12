@@ -1,6 +1,6 @@
 """Score a saved batch: read the database now, run each task's predicate, write the report.
 
-    uv run python -m harness.score harness_runs/<batch>
+    uv run python -m eval_harness.score eval_runs/<batch>
 
 Writes <batch>/report.json (ScoreReport), <batch>/report.md and <batch>/view.html (the batch page, Revision 15).
 Each task's checks run against one database snapshot per instance; the task's verdict is the worst of its checks.
@@ -15,42 +15,53 @@ from pathlib import Path
 
 from email_agent.config import PROJECT_ROOT, get_settings
 from email_agent.record.jsonio import dump_json
-from harness.contracts import SavedRun, ScoreReport, Verdict
-from harness.db import DbSnapshot, snapshot
-from harness.predicates import check_all, worst
-from harness.view import write_batch_view
+from eval_harness.contracts import SavedRun, ScoreReport, Verdict
+from eval_harness.db import DbSnapshot, snapshot
+from eval_harness.predicates import check_all, worst
+from eval_harness.view import write_batch_view
 
 ICON = {"approve": "✅", "revise": "❌", "unevaluated": "⚪"}
+
+
+def verdict_of(saved: SavedRun, snap: DbSnapshot | None, snap_error: str | None = None) -> Verdict:
+    """One task's verdict from its saved run and a database snapshot (None = the snapshot could not be read)."""
+    base = {"task_id": saved.task.id, "instance": saved.task.instance, "run_id": saved.run_id,
+            "run_stopped": saved.stopped or ("crashed" if saved.error else None),
+            "served_by": ", ".join(f"{k} ×{n}" for k, n in saved.served_by.items()) or None}
+    try:
+        if snap is None:
+            raise RuntimeError(snap_error or "no database snapshot")
+        checks = check_all(saved, snap)
+    except Exception as e:
+        return Verdict(**base, status="unevaluated", reason=f"scoring raised {type(e).__name__}: {e}")
+    status = worst(checks)
+    reason = checks[0].reason if len(checks) == 1 else " · ".join(f"{c.name}: {c.status}" for c in checks)
+    details = {f"{c.name} — {k}" if len(checks) > 1 else k: v for c in checks for k, v in c.details.items()}
+    return Verdict(**base, status=status, reason=reason, details=details, checks=checks)
 
 
 async def score(batch: Path) -> ScoreReport:
     settings = get_settings()
     verdicts: list[Verdict] = []
-    snaps: dict[str, DbSnapshot] = {}
+    snaps: dict[str, DbSnapshot | None] = {}
+    errors: dict[str, str] = {}
     for path in sorted(batch.glob("*.json")):
         if path.name == "report.json":
             continue
         saved = SavedRun.model_validate_json(path.read_text())
-        base = {"task_id": saved.task.id, "instance": saved.task.instance, "run_id": saved.run_id,
-                "run_stopped": saved.stopped or ("crashed" if saved.error else None),
-                "served_by": ", ".join(f"{k} ×{n}" for k, n in saved.served_by.items()) or None}
-        try:
-            if saved.task.instance not in snaps:
-                snaps[saved.task.instance] = await snapshot(settings, saved.task.instance)
-            checks = check_all(saved, snaps[saved.task.instance])
-        except Exception as e:
-            verdicts.append(Verdict(**base, status="unevaluated", reason=f"scoring raised {type(e).__name__}: {e}"))
-            continue
-        status = worst(checks)
-        reason = checks[0].reason if len(checks) == 1 else " · ".join(f"{c.name}: {c.status}" for c in checks)
-        details = {f"{c.name} — {k}" if len(checks) > 1 else k: v for c in checks for k, v in c.details.items()}
-        verdicts.append(Verdict(**base, status=status, reason=reason, details=details, checks=checks))
+        instance = saved.task.instance
+        if instance not in snaps:
+            try:
+                snaps[instance] = await snapshot(settings, instance)
+            except Exception as e:
+                snaps[instance], errors[instance] = None, f"{type(e).__name__}: {e}"
+        verdicts.append(verdict_of(saved, snaps[instance], errors.get(instance)))
     return ScoreReport(batch=str(batch.relative_to(PROJECT_ROOT)), verdicts=verdicts)
 
 
 def render(report: ScoreReport) -> str:
     c = report.counts
-    lines = [f"# Harness report — {report.batch}", "",
+    lines = [f"# Test-suite report — {report.batch}", "",
              f"{c['approve']} approve · {c['revise']} revise · {c['unevaluated']} unevaluated "
              "(unevaluated is never a pass)", "",
              "| task | instance | verdict | reason | run stopped | served by | run |", "|---|---|---|---|---|---|---|"]
@@ -66,7 +77,7 @@ def render(report: ScoreReport) -> str:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Score a saved harness batch")
+    ap = argparse.ArgumentParser(description="Score a saved test-suite batch")
     ap.add_argument("batch", type=Path)
     args = ap.parse_args()
     batch = args.batch if args.batch.is_absolute() else PROJECT_ROOT / args.batch

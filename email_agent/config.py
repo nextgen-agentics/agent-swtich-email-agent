@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     as_clinic_password: SecretStr | None = None
     as_retail_password: SecretStr | None = None
     as_agency_password: SecretStr | None = None
+    # Given by the AgentSwitch runner on an official run (Revision 18; docs/project/official-runs.md); all optional.
+    # AGENTSWITCH_BASE_URL replaces the address of AGENTSWITCH_INSTANCE (a fresh copy of that book), and
+    # AGENTSWITCH_TOKEN is used as the bearer token instead of logging in with a password.
+    agentswitch_base_url: str | None = None
+    agentswitch_token: SecretStr | None = None
+    agentswitch_instance: str | None = None
 
     # LLM route (Revision 11): PROVIDER goes first, then the other provider — every option in priority order.
     provider: Literal["gemini", "openai"] = "gemini"
@@ -78,6 +84,10 @@ class Settings(BaseSettings):
     # order from the bake-off 2026-10-03 (docs/project/plan.md, Revision 11): DeepSeek 5/5 right, GLM 4/5, Qwen 2/4
     wandb_models: str = "deepseek-ai/DeepSeek-V4.1-Flash,zai-org/GLM-5.3-Flash,Qwen/Qwen3-30B-A3B-Instruct-2507"
     openai_base_url: str = "https://api.inference.wandb.ai/v1"
+    # Any OpenAI-compatible endpoint (Revision 18: the AgentSwitch runner's model). Used when WANDB_API_KEY is not set;
+    # OPENAI_MODEL, when set, is the only model of the "openai" provider (instead of WANDB_MODELS).
+    openai_api_key: SecretStr | None = None
+    openai_model: str | None = None
     # Reasoning on W&B models (Revision 17). Off = faster replies and fewer tokens: sent as
     # chat_template_kwargs.enable_thinking=false, which DeepSeek-V4.1-Flash honours; GLM-5.3-Flash always reasons and
     # Qwen3-30B-A3B-Instruct never does (W&B / CoreWeave reasoning docs, 2026-10). A model that refuses the flag is
@@ -96,7 +106,7 @@ class Settings(BaseSettings):
     mcp_concurrency: int = 2           # MCP calls at once (Stage 0: the server answers our calls one at a time)
     mcp_call_timeout_s: float = 90.0   # one MCP call; past it the call fails alone (the transport's own 300 s read
                                        # timeout would end the whole session: price-keystone, 2026-10-04)
-    mcp_open_timeout_s: float = 60.0   # opening a session: token check + handshake (a harness batch stalled 8 min
+    mcp_open_timeout_s: float = 60.0   # opening a session: token check + handshake (a test-suite batch stalled 8 min
     mcp_close_timeout_s: float = 20.0  # between tasks, 2026-10-04); closing it: the session DELETE
     max_planner_rounds: int = 12
     validate_verdicts: bool = True     # cross-model check of write-causing verdicts before writing (Stage 5)
@@ -124,9 +134,20 @@ class Settings(BaseSettings):
     memory_vector_floor: float = 0.65  # hybrid recall without a party: a memory this close counts as matching
 
     def instance(self, name: str) -> Instance:
+        """The instance, at AGENTSWITCH_BASE_URL when that is set for it (an official run's fresh copy)."""
         if name not in INSTANCES:
             raise KeyError(f"unknown instance {name!r}; known: {sorted(INSTANCES)}")
-        return INSTANCES[name]
+        found = INSTANCES[name]
+        if self.agentswitch_base_url and self.agentswitch_instance == name:
+            return found.model_copy(update={"base_url": self.agentswitch_base_url.rstrip("/")})
+        return found
+
+    def openai_key(self) -> SecretStr | None:
+        """The OpenAI-compatible endpoint's key: WANDB_API_KEY, or else OPENAI_API_KEY."""
+        for key in (self.wandb_api_key, self.openai_api_key):
+            if key is not None and key.get_secret_value():
+                return key
+        return None
 
     def house_rules(self, instance: str) -> str | None:
         """rules/<instance>.md, if you wrote one: standing instructions for this book (memory layer 1), at most
@@ -146,9 +167,14 @@ class Settings(BaseSettings):
         return [(slot, k) for slot, k in enumerate(keys, start=1) if k is not None and k.get_secret_value()]
 
     def models_for(self, provider: str) -> list[str]:
-        """The provider's models in order; MODEL (if set) replaces the primary provider's first one."""
-        models = [self.gemini_model] if provider == "gemini" else \
-            [m.strip() for m in self.wandb_models.split(",") if m.strip()]
+        """The provider's models in order; MODEL (if set) replaces the primary provider's first one. For "openai",
+        OPENAI_MODEL (if set) is the only model, otherwise WANDB_MODELS."""
+        if provider == "gemini":
+            models = [self.gemini_model]
+        elif self.openai_model:
+            models = [self.openai_model]
+        else:
+            models = [m.strip() for m in self.wandb_models.split(",") if m.strip()]
         if provider == self.provider and self.model:
             models = [self.model] + [m for m in models[1:] if m != self.model]
         return models

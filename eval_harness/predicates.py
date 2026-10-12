@@ -17,7 +17,7 @@ from pydantic import BaseModel, ValidationError
 
 from email_agent.config import PROJECT_ROOT
 from email_agent.contracts.agent import FinalAnswer, RunContext, RunOutcome, WriteRecord
-from harness.contracts import (
+from eval_harness.contracts import (
     CheckResult,
     FollowUpAnswerKey,
     GroundTruth,
@@ -25,12 +25,13 @@ from harness.contracts import (
     PriceAnswerKey,
     SavedRun,
     SortAnswerKey,
+    Task,
     ThreadFlag,
     VerdictStatus,
 )
-from harness.db import DbSnapshot, our_changes_since, when
+from eval_harness.db import DbSnapshot, our_changes_since, when
 
-GROUND_TRUTH = PROJECT_ROOT / "harness" / "ground_truth"
+GROUND_TRUTH = PROJECT_ROOT / "eval_harness" / "ground_truth"
 KeyT = TypeVar("KeyT", bound=BaseModel)
 
 
@@ -50,7 +51,7 @@ def _writes(run_dir: str) -> list[WriteRecord]:
 
 
 def _dry_run(saved: SavedRun) -> bool:
-    """Saved by the harness (since 2026-10-03), or recorded by the agent in outcome.json — so a dry run
+    """Saved by our test suite (since 2026-10-03), or recorded by the agent in outcome.json — so a dry run
     that wrote nothing is still recognised, also in batches saved before SavedRun.dry_run existed."""
     if saved.dry_run:
         return True
@@ -375,6 +376,38 @@ PREDICATES: dict[str, Callable[[SavedRun, DbSnapshot, dict[str, Any]], CheckResu
     "inbox_sorted": inbox_sorted,
     "refused_without_writes": refused_without_writes,
 }
+# ── is a task's answer key ready? (Revision 19: the official run runs only tasks it can score) ─────────────────
+
+def answer_key_gap(task: Task) -> str | None:
+    """Why `task` cannot be scored yet — an answer key it needs is missing, or has undecided items in the mailboxes the
+    task works in (its `mailboxes:`, else every mailbox the key covers) — or None when it can. Read before any run; the
+    checks still decide from the run's own mailboxes afterwards."""
+    keys: dict[str, tuple[str, Callable[[Any], bool], str]] = {
+        "needs_reply_flagged": (f"{task.instance}.yaml", lambda c: c.needs_reply is None, "needs-reply"),
+        "price_agreements_recorded": (f"price/{task.instance}.yaml", lambda c: c.agreed is None, "price"),
+        "followups_created": (f"follow-ups/{task.instance}.yaml", lambda c: c.needs_follow_up is None, "follow-ups"),
+        "inbox_sorted": (f"sort/{task.instance}.yaml",
+                         lambda c: c.importance is None or c.split_category is None, "sort"),
+    }
+    models: dict[str, type[BaseModel]] = {"needs_reply_flagged": GroundTruth, "price_agreements_recorded": PriceAnswerKey,
+                                          "followups_created": FollowUpAnswerKey, "inbox_sorted": SortAnswerKey}
+    for spec in task.predicates:
+        if spec.name not in keys:
+            continue                                   # summaries, memory and refusals need no answer key
+        name, undecided_item, label = keys[spec.name]
+        try:
+            key: Any = _load_key(GROUND_TRUTH / name, models[spec.name])
+        except Unevaluated as e:
+            return str(e)
+        scope = set(task.mailboxes or key.our_mailboxes)
+        items = key.needs_reply if isinstance(key, GroundTruth) else key.candidates
+        mailbox_of = key.mailbox_of if isinstance(key, GroundTruth) else (lambda c: c.mailbox)
+        undecided = [c for c in items if mailbox_of(c) in scope and undecided_item(c)]
+        if undecided:
+            return f"the {label} answer key has {len(undecided)} undecided item(s) in {', '.join(sorted(scope))}"
+    return None
+
+
 ORDER = {"revise": 2, "unevaluated": 1, "approve": 0}
 
 
