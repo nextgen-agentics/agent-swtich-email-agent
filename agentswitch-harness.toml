@@ -1,7 +1,7 @@
 # Read by the AgentSwitch runner ("Our harness → Submit for a run"): how to install our project, the command it runs
 # once per instance (against a fresh copy, no internet), and the file it reads afterwards.
 # What the command does and how to submit: docs/official-runs.md.
-install = "pip install uv && UV_PYTHON_DOWNLOADS=automatic uv sync --frozen --no-dev"
+install = "pip install uv && uv sync --frozen --no-dev"
 run     = "uv run --frozen --no-sync python -m eval_harness.official --ready-only"
 results = "results.json"
 instances = ["suryodaya", "keystone"]

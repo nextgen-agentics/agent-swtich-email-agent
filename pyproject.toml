@@ -3,7 +3,7 @@ name = "email-agent"
 version = "0.1.0"
 description = "Team 10 Email-seat agent and its test suite for the AgentSwitch capstone"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "google-genai>=2.25",
     "openai>=3.19",
@@ -16,7 +16,9 @@ dependencies = [
     "python-dotenv>=1.2",
     "rich>=15.0",
     "faiss-cpu>=1.15.1",
-    "numpy>=2.5",
+    # numpy 2.5 needs Python 3.12; the AgentSwitch runner has 3.11, where 2.4 is the newest
+    "numpy>=2.5; python_version >= '3.12'",
+    "numpy>=2.4; python_version < '3.12'",
 ]
 
 [dependency-groups]
@@ -63,7 +65,7 @@ norecursedirs = [".*", "reference", "runs", "eval_runs", "state", "data", "docs"
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py311"
 extend-exclude = [
     # Generated from the platform's tool schemas, never hand-edited.
     "email_agent/contracts/tool_args.py",
@@ -75,7 +77,7 @@ extend-exclude = [
 select = ["E4", "E7", "E9", "F", "W", "I"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.11"
 plugins = ["pydantic.mypy"]
 files = ["email_agent", "eval_harness"]
 exclude = [
