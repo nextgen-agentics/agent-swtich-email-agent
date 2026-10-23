@@ -27,8 +27,14 @@ def _no_real_config(monkeypatch):
 
 @pytest.fixture
 def settings(tmp_path) -> Settings:
-    return Settings(_env_file=None, runs_dir=tmp_path / "runs", state_dir=tmp_path / "state",
-                    cache_dir=tmp_path / ".cache", rules_dir=tmp_path / "rules", validate_verdicts=False)
+    return Settings(
+        _env_file=None,
+        runs_dir=tmp_path / "runs",
+        state_dir=tmp_path / "state",
+        cache_dir=tmp_path / ".cache",
+        rules_dir=tmp_path / "rules",
+        validate_verdicts=False,
+    )
 
 
 @pytest.fixture
@@ -48,6 +54,13 @@ def mail(platform) -> Mail:
 
 @pytest.fixture
 def ctx(platform) -> RunContext:
-    return RunContext(run_id="test-run", instance="suryodaya", request="What needs my reply today?", today=TODAY,
-                      me=platform.user, locale=platform.locale,
-                      mailboxes=[OurMailbox(id=SALES["id"], email=SALES["email"])], our_addresses=[SALES["email"]])
+    return RunContext(
+        run_id="test-run",
+        instance="suryodaya",
+        request="What needs my reply today?",
+        today=TODAY,
+        me=platform.user,
+        locale=platform.locale,
+        mailboxes=[OurMailbox(id=SALES["id"], email=SALES["email"])],
+        our_addresses=[SALES["email"]],
+    )

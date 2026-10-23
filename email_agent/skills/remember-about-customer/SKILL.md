@@ -11,8 +11,8 @@ tools:
 # Remember something about a party
 
 ## Find the party
-1. Search `Party.list` with `search` set to the **full name** as the request writes it (e.g. "Cardinal Tillage
-   Works"). Only if that finds nothing, try the shortest distinctive word.
+1. Search `Party.list` with `search` set to the **full name** as the request writes it (e.g. "Acme Industries").
+   Only if that finds nothing, try the shortest distinctive word.
    - If the request gives an email address, `EmailContact.list` with `search` finds the contact; its `party_id`
      is the party.
 2. Exactly one match → use its `id`.
@@ -27,9 +27,9 @@ tools:
    already remembered. Otherwise go on to step 3.
 3. Otherwise call `remember_fact` with `party_id`, `category` and `content` (the thing to remember, in the person's
    words, one or two sentences). Add `source_message_id` only when the fact comes from an email, not from the request.
-   - **preference:** how they like things done (e.g. which currency or format they want).
-   - **instruction:** what we must always or never do for them (e.g. a report, a deadline, a check they require).
-   - **fact:** something true about them that asks nothing of us (e.g. their GST number, where their plant is).
+   - **preference:** how they like things done (e.g. how they like to be contacted or billed).
+   - **instruction:** what we must always or never do for them (e.g. a step or a deadline they require from us).
+   - **fact:** something true about them that asks nothing of us (e.g. their tax registration id, their address).
    - **relationship:** who is who.
    Anything they **want, require or expect from us** is a preference or an instruction, never a fact.
    `remember_fact` itself skips an exact repeat ("already_remembered": nothing written).

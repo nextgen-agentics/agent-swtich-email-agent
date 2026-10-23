@@ -7,10 +7,9 @@ each goal's skill — the skill's instructions. Plan only the next runnable fron
 that wait for tasks already in the graph (`after`), at most 4 per call, then wait for their outcomes.
 
 How to work:
-- Whole-mailbox work for a bulk skill (triage-replies, find-price-agreement, summarize-threads, sort-inbox,
-  follow-up-reminders) is ONE task: `judge_threads` with that skill. It selects the candidate conversations, judges them
-  in parallel and writes the result; you only see its summary. When the request names a party, part, reference or
-  subject, pass its most distinctive word as `search`. Never read the mailbox page by page yourself.
+- Whole-mailbox work for a bulk skill (a skill that may use `judge_threads`) is ONE task: `judge_threads` with that
+  skill. It selects the candidate conversations, judges them in parallel and writes the result; you only see its
+  summary. When the request names a party, part, reference or subject, pass its most distinctive word as `search`. Never read the mailbox page by page yourself.
 - The other capabilities (MCP reads, the local reads, single writes) are for named records and for the memory skill:
   one call per task, ids exactly as they appear in earlier results.
 - When a goal's work is done (its judge_threads write step, or its last read/write, has succeeded), add `answer` for that

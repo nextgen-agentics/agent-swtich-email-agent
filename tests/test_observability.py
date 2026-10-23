@@ -55,10 +55,11 @@ async def test_a_runs_spans_form_one_tree_with_every_parent_enclosing_its_childr
     assert all(s["status"] == "ok" for s in trace if s["kind"] in ("node", "write"))
 
 
-async def test_a_resumed_run_shows_the_unfinished_attempt_and_the_retry_as_separate_spans(settings, platform, mail,
-                                                                                            monkeypatch):
+async def test_a_resumed_run_shows_the_unfinished_attempt_and_the_retry_as_separate_spans(
+    settings, platform, mail, monkeypatch
+):
     mail.conversation("Samples", them("Could you send two samples?", "2026-10-04T09:00:00"))
-    monkeypatch.setenv("EMAIL_AGENT_CRASH_AT", "llm_call_started:3")           # inside the shard's model call
+    monkeypatch.setenv("EMAIL_AGENT_CRASH_AT", "llm_call_started:3")  # inside the shard's model call
     with pytest.raises(BaseException) as stop:
         await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=_model())
     assert any(isinstance(e, InjectedCrash) for e in leaves(stop.value))

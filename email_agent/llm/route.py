@@ -8,8 +8,8 @@ which the old Decision step used, was removed after Stage 9: every graph role an
 `make_llm` returns a RoutedLlm: one ordered list of options (Revision 11). PROVIDER's options come first, then
 the other provider's: Gemini = GEMINI_MODEL on key 1, then keys 2–5 (failover only, never rotated for load);
 W&B = each model in WANDB_MODELS. Each call goes to the first usable option. A failure is classified, and the
-option rests (rate limit, daily quota, server trouble), dies (bad key, unknown model), or is skipped for this
-call only (ran out of thinking budget). Health is shared by the whole process, so a test-suite batch carries it from
+option rests (rate limit, daily quota, server trouble), dies (bad key, unknown model, spent token budget), or is
+skipped for this call only (ran out of thinking budget). Health is shared by the whole process, so a test-suite batch carries it from
 task to task. Every reply records who answered (provider, model, key SLOT — never a key).
 """
 
@@ -261,7 +261,10 @@ class OpenAICompatClient:
 
 # ── what a failure means for the route ───────────────────────────────────────
 
-Kind = Literal["rate_limit", "daily_quota", "dead_key", "dead_model", "server", "this_call"]
+Kind = Literal["rate_limit", "daily_quota", "dead_key", "budget_spent", "dead_model", "server", "this_call"]
+# The AgentSwitch runner's model answers 429 with this code once the run's token budget is spent (instructor's harness
+# rules, Oct 2026). It never comes back, so it is not a rate limit to wait out.
+BUDGET_SPENT_CODE = "budget_exhausted"
 
 
 @dataclass
@@ -273,6 +276,7 @@ class Failure:
     def words(self) -> str:
         return {"rate_limit": f"rate-limited (retry in {self.retry_after or 0:.0f}s)",
                 "daily_quota": "out of today's quota", "dead_key": "key refused",
+                "budget_spent": "token budget spent",
                 "dead_model": "model unavailable", "server": "server trouble",
                 "this_call": "could not finish this reply"}[self.kind]
 
@@ -317,6 +321,8 @@ def classify_openai(e: BaseException) -> Failure | None:
     if isinstance(e, BudgetExceeded):
         return Failure("this_call", str(e))
     if isinstance(e, openai.RateLimitError):
+        if BUDGET_SPENT_CODE in str(e) or BUDGET_SPENT_CODE in json.dumps(e.body, default=str):
+            return Failure("budget_spent", str(e)[:300])
         retry = e.response.headers.get("retry-after") if getattr(e, "response", None) is not None else None
         try:
             wait = float(retry) if retry else 30.0
@@ -424,15 +430,19 @@ class RoutedLlm:
             opt.resting_until = now + (f.retry_after or 30.0)
         elif f.kind == "server":
             opt.resting_until = now + self.breaker_s
-        elif f.kind == "dead_key":
+        elif f.kind in ("dead_key", "budget_spent"):
             # Gemini: only this key. W&B: one key serves every model, so all of them stop.
             for o in self.options:
                 if o is opt or (opt.provider == "openai" and o.provider == "openai"):
-                    o.dead_reason = "key refused"
+                    o.dead_reason = f.words()
         elif f.kind == "dead_model":
             for o in self.options:              # the same model on every key
                 if o.provider == opt.provider and o.model == opt.model:
                     o.dead_reason = "model unavailable"
+
+    def budget_spent(self) -> bool:
+        """Every option is dead because the token budget is spent: no call can succeed for the rest of the run."""
+        return all(o.dead_reason == "token budget spent" for o in self.options)
 
     async def chat(self, req: LlmRequest) -> LlmReply:
         deadline = time.monotonic() + self.wait_max_s

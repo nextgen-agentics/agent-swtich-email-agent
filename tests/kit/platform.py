@@ -24,7 +24,7 @@ from email_agent.graph.store import InjectedCrash
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS = ROOT / "data" / "schemas" / "suryodaya"
 PAGING = {"limit", "offset", "sort_by", "sort_order", "search"}
-CACHE_FROM = 10_000                        # load-test tables only; smaller tests edit rows in place
+CACHE_FROM = 10_000  # load-test tables only; smaller tests edit rows in place
 
 
 def now(**later: float) -> str:
@@ -39,16 +39,18 @@ class FakePlatform:
         self.locale = RegimeLocale.model_validate_json((SCHEMAS / "locale.json").read_text())
         self.rows: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
         self.calls: list[tuple[str, dict[str, Any]]] = []
-        self.no_answer: dict[str, bool] = {}     # tool → applied first? The caller gets a timeout either way.
-        self.crash_after: set[str] = set()       # tool → apply it, then the agent process "dies"
-        self.meanwhile: dict[str, Callable[[], None]] = {}   # tool → what someone else does right after that call
-        self.leaks_other_mailboxes = False       # BUG-019/026: a list ignores its mailbox_id filter
-        self.hooks: list[Callable[[str, dict[str, Any]], None]] = []   # run before every call (name, arguments)
-        self.delay = 0.0                         # seconds each call takes, so calls overlap as they do live
+        self.no_answer: dict[str, bool] = {}  # tool → applied first? The caller gets a timeout either way.
+        self.crash_after: set[str] = set()  # tool → apply it, then the agent process "dies"
+        self.meanwhile: dict[str, Callable[[], None]] = {}  # tool → what someone else does right after that call
+        self.leaks_other_mailboxes = False  # BUG-019/026: a list ignores its mailbox_id filter
+        self.hooks: list[Callable[[str, dict[str, Any]], None]] = []  # run before every call (name, arguments)
+        self.delay = 0.0  # seconds each call takes, so calls overlap as they do live
         self.in_flight = self.peak = 0
-        self._listings: dict[tuple, list[dict[str, Any]]] = {}   # sorted listings, until their table changes
-        self._tools = [Tool(name=t["name"], description=t.get("description") or "", input_schema=t["inputSchema"])
-                       for t in json.loads((SCHEMAS / "mcp-tools.json").read_text())["tools"]]
+        self._listings: dict[tuple, list[dict[str, Any]]] = {}  # sorted listings, until their table changes
+        self._tools = [
+            Tool(name=t["name"], description=t.get("description") or "", input_schema=t["inputSchema"])
+            for t in json.loads((SCHEMAS / "mcp-tools.json").read_text())["tools"]
+        ]
 
     # ── rows ─────────────────────────────────────────────────────────────────
     def add(self, entity: str, **row: Any) -> dict[str, Any]:
@@ -68,8 +70,11 @@ class FakePlatform:
 
     def writes(self, tool: str | None = None) -> list[tuple[str, dict[str, Any]]]:
         """Every call that changed (or tried to change) platform data."""
-        return [(name, args) for name, args in self.calls
-                if tool_operation(name) not in ("list", "get") and (tool is None or name == tool)]
+        return [
+            (name, args)
+            for name, args in self.calls
+            if tool_operation(name) not in ("list", "get") and (tool is None or name == tool)
+        ]
 
     # ── McpSession ───────────────────────────────────────────────────────────
     def session(self, *_args: Any, **_kwargs: Any) -> "FakePlatform":
@@ -85,8 +90,11 @@ class FakePlatform:
         return self._tools
 
     async def call(self, name: str, arguments: BaseModel | dict[str, Any] | None = None) -> ToolOutcome:
-        args = arguments.model_dump(exclude_unset=True, mode="json") if isinstance(arguments, BaseModel) \
+        args = (
+            arguments.model_dump(exclude_unset=True, mode="json")
+            if isinstance(arguments, BaseModel)
             else dict(arguments or {})
+        )
         self.calls.append((name, args))
         for hook in self.hooks:
             hook(name, args)
@@ -102,8 +110,9 @@ class FakePlatform:
         if name in self.no_answer:
             if self.no_answer[name]:
                 self._apply(name, args)
-            return ToolOutcome(tool=name, arguments=args, ok=False,
-                               error=McpError(kind="timeout", message="no answer within 90 s"))
+            return ToolOutcome(
+                tool=name, arguments=args, ok=False, error=McpError(kind="timeout", message="no answer within 90 s")
+            )
         try:
             data = self._apply(name, args)
         except LookupError as e:
@@ -111,28 +120,38 @@ class FakePlatform:
         if name in self.crash_after:
             self.crash_after.discard(name)
             raise InjectedCrash(f"the agent died after the platform applied {name}")
-        return ToolOutcome(tool=name, arguments=args, ok=True,
-                           result=CallToolResult(content=[TextContent(type="text", text=json.dumps(data))],
-                                                 structured_content=data, is_error=False))
+        return ToolOutcome(
+            tool=name,
+            arguments=args,
+            ok=True,
+            result=CallToolResult(
+                content=[TextContent(type="text", text=json.dumps(data))], structured_content=data, is_error=False
+            ),
+        )
 
     def _apply(self, name: str, args: dict[str, Any]) -> Any:
         entity, op = tool_entity(name), tool_operation(name)
         table = self.rows[entity]
         if op == "list":
             skip = PAGING | ({"mailbox_id"} if self.leaks_other_mailboxes else set())
-            key = (entity, json.dumps({k: v for k, v in args.items() if k not in {"limit", "offset"}}, sort_keys=True),
-                   self.leaks_other_mailboxes)
+            key = (
+                entity,
+                json.dumps({k: v for k, v in args.items() if k not in {"limit", "offset"}}, sort_keys=True),
+                self.leaks_other_mailboxes,
+            )
             rows = self._listings.get(key) if len(table) >= CACHE_FROM else None
-            if rows is None:                       # a 50,000-row table is filtered and sorted once, not per page
+            if rows is None:  # a 50,000-row table is filtered and sorted once, not per page
                 rows = [r for r in table.values() if all(_same(r.get(k), v) for k, v in args.items() if k not in skip)]
                 if args.get("search"):
                     rows = [r for r in rows if args["search"].lower() in json.dumps(r).lower()]
-                rows.sort(key=lambda r: r.get(args.get("sort_by") or "updated_at") or "",
-                          reverse=args.get("sort_order", "desc") == "desc")
+                rows.sort(
+                    key=lambda r: r.get(args.get("sort_by") or "updated_at") or "",
+                    reverse=args.get("sort_order", "desc") == "desc",
+                )
                 if len(table) >= CACHE_FROM:
                     self._listings[key] = rows
             offset, limit = args.get("offset", 0), args.get("limit", 20)
-            return {"data": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset}
+            return {"data": rows[offset : offset + limit], "total": len(rows), "limit": limit, "offset": offset}
         if op == "get":
             if args["id"] not in table:
                 raise LookupError(f"{entity} {args['id']} not found")
@@ -152,9 +171,13 @@ class FakePlatform:
 
     @staticmethod
     def _failed(name: str, args: dict[str, Any], message: str) -> ToolOutcome:
-        return ToolOutcome(tool=name, arguments=args, ok=False,
-                           result=CallToolResult(content=[TextContent(type="text", text=message)], is_error=True),
-                           error=McpError(kind="tool", message=message))
+        return ToolOutcome(
+            tool=name,
+            arguments=args,
+            ok=False,
+            result=CallToolResult(content=[TextContent(type="text", text=message)], is_error=True),
+            error=McpError(kind="tool", message=message),
+        )
 
     # ── RestClient ───────────────────────────────────────────────────────────
     def rest(self, *_args: Any, **_kwargs: Any) -> "FakePlatform":

@@ -36,9 +36,12 @@ async def test_a_write_the_model_proposes_on_another_teams_mailbox_is_refused_an
 
     def plan(body):
         if not body["graph"]:
-            return {"tasks": [task("flag_it", "EmailThread.update", "g1", id=theirs, flag_status="flagged")],
-                    "reason": "flag the order"}
+            return {
+                "tasks": [task("flag_it", "EmailThread.update", "g1", id=theirs, flag_status="flagged")],
+                "reason": "flag the order",
+            }
         return {"tasks": [task("answer_g1", "answer", "g1")], "reason": "report what happened"}
+
     model = ScriptedModel(goals=[TRIAGE], plan=plan)
 
     out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model)
@@ -101,12 +104,17 @@ async def test_a_watcher_run_cannot_write_outside_its_own_conversation(settings,
 
     def plan(body):
         if not body["graph"]:
-            return {"tasks": [task("judge_g1", "judge_threads", "g1", skill="triage-replies"),
-                              task("flag_other", "EmailThread.update", "g1", id=other, flag_status="flagged")],
-                    "reason": "judge, and flag the invoice too"}
+            return {
+                "tasks": [
+                    task("judge_g1", "judge_threads", "g1", skill="triage-replies"),
+                    task("flag_other", "EmailThread.update", "g1", id=other, flag_status="flagged"),
+                ],
+                "reason": "judge, and flag the invoice too",
+            }
         if any(n["state"] in ("pending", "running", "waiting") for n in body["graph"]):
             return {"tasks": [], "reason": "wait"}
         return {"tasks": [task("answer_g1", "answer", "g1")], "reason": "done"}
+
     model = ScriptedModel(goals=[TRIAGE], plan=plan, verdict=_needs_reply)
 
     out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model, threads=[event])

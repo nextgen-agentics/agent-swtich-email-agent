@@ -12,8 +12,13 @@ from typing import Any
 from email_agent.contracts.llm import LlmReply, LlmRequest, Usage
 
 IDS = re.compile(r"Return exactly one verdict for each of these thread ids: (\[.*\])")
-SHARDS = {"TriageShard": "triage-replies", "PriceShard": "find-price-agreement", "SummaryShard": "summarize-threads",
-          "SortShard": "sort-inbox", "FollowUpShard": "follow-up-reminders"}
+SHARDS = {
+    "TriageShard": "triage-replies",
+    "PriceShard": "find-price-agreement",
+    "SummaryShard": "summarize-threads",
+    "SortShard": "sort-inbox",
+    "FollowUpShard": "follow-up-reminders",
+}
 BULK = set(SHARDS.values())
 
 Script = Callable[[LlmRequest], Any]
@@ -22,8 +27,12 @@ Verdicts = Callable[[str], dict[str, Any]]
 
 def goal(text: str, skill: str | None, reason: str | None = None) -> dict[str, Any]:
     if skill is None:
-        return {"text": text, "skill": None, "no_skill_reason": reason or "out_of_seat",
-                "explanation": "This agent works on email only and cannot read that."}
+        return {
+            "text": text,
+            "skill": None,
+            "no_skill_reason": reason or "out_of_seat",
+            "explanation": "This agent works on email only and cannot read that.",
+        }
     return {"text": text, "skill": skill}
 
 
@@ -45,7 +54,7 @@ def judge_then_answer(body: dict[str, Any]) -> dict[str, Any]:
         if not mine and g["skill"] in BULK:
             tasks.append(task(f"judge_{g['id']}", "judge_threads", g["id"], skill=g["skill"]))
         elif mine and not any(n["state"] in ("pending", "running", "waiting") for n in mine):
-            tries = sum(n["capability"] == "answer" for n in mine)           # a failed answer is tried again
+            tries = sum(n["capability"] == "answer" for n in mine)  # a failed answer is tried again
             tasks.append(task(f"answer_{g['id']}" + (f"_{tries + 1}" if tries else ""), "answer", g["id"]))
     return {"tasks": tasks, "reason": "judge the mailbox, then answer"}
 
@@ -61,9 +70,17 @@ def thread_ids(req: LlmRequest) -> list[str]:
 
 
 class ScriptedModel:
-    def __init__(self, *, goals: list[dict[str, Any]], plan: Callable[[dict[str, Any]], dict[str, Any]] = judge_then_answer,
-                 verdict: Verdicts | dict[str, Verdicts] | None = None, answer: str = "Done: see the conversations above.",
-                 critic: Script | None = None, model: str = "fake-flash", delay: float = 0.0):
+    def __init__(
+        self,
+        *,
+        goals: list[dict[str, Any]],
+        plan: Callable[[dict[str, Any]], dict[str, Any]] = judge_then_answer,
+        verdict: Verdicts | dict[str, Verdicts] | None = None,
+        answer: str = "Done: see the conversations above.",
+        critic: Script | None = None,
+        model: str = "fake-flash",
+        delay: float = 0.0,
+    ):
         self.model, self.delay = model, delay
         self.requests: list[LlmRequest] = []
         self.in_flight = self.peak = 0
@@ -74,6 +91,7 @@ class ScriptedModel:
             "answer": lambda req: answer,
             "critic": critic or _ready_or_score,
         }
+        self.scripts["verifier"] = self.scripts["critic"]
         self.scripts["validator"] = self.scripts["judge"]
 
     def calls(self, purpose: str) -> list[LlmRequest]:
@@ -93,7 +111,9 @@ class ScriptedModel:
             raise out
         text = out if isinstance(out, str) else json.dumps(out)
         prompt = len(req.system) + sum(len(m.text) for m in req.messages)
-        return LlmReply(model=self.model, text=text, usage=Usage(input_tokens=prompt // 4, output_tokens=len(text) // 4))
+        return LlmReply(
+            model=self.model, text=text, usage=Usage(input_tokens=prompt // 4, output_tokens=len(text) // 4)
+        )
 
 
 def _pick(verdict: Verdicts | dict[str, Verdicts] | None, req: LlmRequest) -> Verdicts:
@@ -107,7 +127,7 @@ def _no_reply(_thread_id: str) -> dict[str, Any]:
 
 
 def _ready_or_score(req: LlmRequest) -> dict[str, Any]:
-    # the evidence critic and the answer's verifier share the "critic" purpose; their schemas tell them apart
+    # one script answers both the evidence critic and the answer's verifier; their schemas tell them apart
     if (req.response_schema or {}).get("title") == "VerifierScore":
         return {"score": 90, "critique": "matches the evidence", "issues": []}
     return {"ready": True, "missing": [], "reason": "the evidence covers the goal"}
@@ -123,6 +143,13 @@ def rounds(*batches: list[dict[str, Any]]) -> Callable[[dict[str, Any]], dict[st
         batch = next(left, None)
         if batch is not None:
             return {"tasks": batch, "reason": "the next step"}
-        return {"tasks": [task(f"answer_{g['id']}", "answer", g["id"]) for g in body["goals"]
-                          if g["status"] == "open" and g["skill"]], "reason": "the work is done"}
+        return {
+            "tasks": [
+                task(f"answer_{g['id']}", "answer", g["id"])
+                for g in body["goals"]
+                if g["status"] == "open" and g["skill"]
+            ],
+            "reason": "the work is done",
+        }
+
     return plan

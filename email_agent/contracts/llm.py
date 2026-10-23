@@ -13,7 +13,7 @@ class ChatMessage(BaseModel):
 
 
 class LlmRequest(BaseModel):
-    purpose: Literal["goals", "planner", "judge", "answer", "critic", "validator"]   # which graph role asks
+    purpose: Literal["goals", "planner", "judge", "answer", "critic", "validator", "verifier"]   # which role asks
     system: str
     messages: list[ChatMessage] = Field(min_length=1)
     response_schema: dict[str, Any] | None = None     # set → the model must answer with JSON of this shape
@@ -43,3 +43,8 @@ class LlmReply(BaseModel):
     key_slot: int | None = None                       # … and which Gemini key SLOT (never the key)
     fallback_from: list[str] = Field(default_factory=list)   # options skipped or failed before it, in words
     reused: bool = False                              # replayed from run.sqlite on resume: no call, no tokens spent
+
+    @property
+    def served_by(self) -> str:
+        """Who answered: provider/model, plus the Gemini key slot (never the key)."""
+        return f"{self.provider or '?'}/{self.model}" + (f" key #{self.key_slot}" if self.key_slot else "")

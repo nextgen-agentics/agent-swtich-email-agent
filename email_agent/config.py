@@ -22,7 +22,6 @@ class Instance(BaseModel):
 
     name: str
     base_url: str
-    description: str = ""
     mailboxes: list[str] | None = None   # the addresses the agent works in; None = every mailbox our login has
 
     @property
@@ -33,12 +32,11 @@ class Instance(BaseModel):
 INSTANCES: dict[str, Instance] = {
     i.name: i
     for i in [
-        Instance(name="suryodaya", base_url="https://agentswitch.theschoolofai.in",
-                 description="Suryodaya Precision Works — India, Ind AS, GST"),
-        # Every mailbox our login has (your choice 2026-10-03: orders@ and team10@). A task or --mailbox can narrow
-        # it; the Keystone triage task keeps team10@ only (its answer key, 2026-09-29).
-        Instance(name="keystone", base_url="https://class.agentswitch.theschoolofai.in",
-                 description="Keystone Precision Works LLC — US, US GAAP, Sales & Use Tax"),
+        # Suryodaya Precision Works: India, Ind AS, GST.
+        Instance(name="suryodaya", base_url="https://agentswitch.theschoolofai.in"),
+        # Keystone Precision Works LLC: US, US GAAP, sales and use tax. Every mailbox our login has (your choice
+        # 2026-10-03: orders@ and team10@); a task or --mailbox can narrow it.
+        Instance(name="keystone", base_url="https://class.agentswitch.theschoolofai.in"),
         # Verticals: same tables, different nouns. Login not yet confirmed (Stage 1).
         Instance(name="school", base_url="https://school.agentswitch.theschoolofai.in"),
         Instance(name="clinic", base_url="https://clinic.agentswitch.theschoolofai.in"),
@@ -68,6 +66,10 @@ class Settings(BaseSettings):
     agentswitch_base_url: str | None = None
     agentswitch_token: SecretStr | None = None
     agentswitch_instance: str | None = None
+    # Release 13 (21 Oct): how much of the run's time is left, as seconds or as an end time. Kept as text, so an
+    # unreadable value can never stop the run from starting (eval_harness/official.py reads them).
+    agentswitch_seconds_left: str | None = None
+    agentswitch_deadline: str | None = None
 
     # LLM route (Revision 11): PROVIDER goes first, then the other provider — every option in priority order.
     provider: Literal["gemini", "openai"] = "gemini"

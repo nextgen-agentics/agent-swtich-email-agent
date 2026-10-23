@@ -1,7 +1,7 @@
-"""Contracts of our test suite (eval_harness): the correct answers (ground truth), tasks, verdicts, results.json.
+"""Contracts of our test suite (eval_harness): the correct answers (answer keys), tasks, verdicts, results.json.
 
-Ground truth is decided by you, in the web UI. The script only proposes candidates;
-a task whose ground truth still has undecided items is scored `unevaluated`, never a pass.
+Answer keys are decided by you. A script only suggests; a task whose key still has undecided items in its
+mailboxes is scored `unevaluated`, never a pass, and is left out of the official run.
 """
 
 from __future__ import annotations
@@ -11,119 +11,49 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, StrictBool, model_validator
 
-Proposal = Literal["needs_reply", "fyi_or_thanks", "unclear", "waiting_on_them", "no_inbound"]
+# ── answer keys (eval_harness/ground_truth/needs-reply/<instance>.yaml and price/<instance>.yaml) ───────────────
+# Only what the checks read, plus the subject so you can find the conversation. The context to decide each item (their
+# text, our price lines, a suggestion) is in docs/project/answer-key-decisions.md, written by
+# scripts/agent/propose_ground_truth.py. null = undecided = the task is not run officially and scores `unevaluated`.
 
-
-class NeedsReplyCandidate(BaseModel):
+class NeedsReplyItem(BaseModel):
     thread_id: str
+    mailbox: str                           # which of our addresses the conversation is in
     subject: str | None = None
-    mailbox: str | None = None             # which of our addresses; None in files from before 2026-10-03
-    counterpart: str | None = None
-    newest_real_from: Literal["us", "them"] | None = None
-    newest_real_at: str | None = None
-    newest_real_text: str = ""
-    mirror_copies: int = 0
-    proposal: Proposal                     # the script's suggestion (plain rules, not an LLM)
-    reason: str
     needs_reply: bool | None = None        # YOU decide: true = needs my reply, false = does not
     note: str | None = None                # your remark, optional
 
 
-class GroundTruth(BaseModel):
-    instance: str
-    as_of: date
-    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    our_mailboxes: list[str]
-    needs_reply: list[NeedsReplyCandidate]
-
-    def undecided(self) -> list[NeedsReplyCandidate]:
-        return [c for c in self.needs_reply if c.needs_reply is None]
-
-
-    def mailbox_of(self, c: NeedsReplyCandidate) -> str | None:
-        """Files from before 2026-10-03 cover one mailbox and do not name it per item."""
-        return c.mailbox or (self.our_mailboxes[0] if len(self.our_mailboxes) == 1 else None)
-
-
-# ── answer keys for the other features (eval_harness/ground_truth/<feature>/<instance>.yaml) ──────────────────────
-
-class AnswerKey(BaseModel):
-    """What every answer-key file shares. The script proposes, you decide; null = undecided = unevaluated."""
-
-    instance: str
-    as_of: date
-    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    our_mailboxes: list[str]
-
-
-PriceProposal = Literal["agreed", "lost", "pending", "quote_only", "unclear"]
-
-
-class PriceCandidate(BaseModel):
+class PriceItem(BaseModel):
     thread_id: str
+    mailbox: str
     subject: str | None = None
-    mailbox: str | None = None
-    counterpart: str | None = None
-    references: list[str] = Field(default_factory=list)
-    our_price_lines: list[str] = Field(default_factory=list)
-    their_last_text: str = ""
-    proposal: PriceProposal
-    reason: str
     agreed: bool | None = None             # YOU decide: true = they agreed our price in this conversation
-    reference: str | None = None           # our quote reference, as the agent should record it
-    unit_price: float | None = None        # pre-filled from our price line; correct it if wrong
+    message_id: str | None = None          # their accepting message (the mail the agent must find); None = not checked
+    reference: str | None = None           # our quote reference, as the agent should record it; None = not checked
+    unit_price: float | None = None
     total: float | None = None
     note: str | None = None
 
 
-class PriceAnswerKey(AnswerKey):
-    candidates: list[PriceCandidate]
+class AnswerKey(BaseModel):
+    instance: str
+    as_of: date                            # the day the mail was read for this key
+    our_mailboxes: list[str]
 
 
-class FollowUpCandidate(BaseModel):
-    thread_id: str
-    subject: str | None = None
-    mailbox: str | None = None
-    counterpart: str | None = None
-    our_last_at: str | None = None
-    newest_real_text: str = ""
-    proposal: Literal["waiting_on_them", "not_waiting"]
-    reason: str
-    needs_follow_up: bool | None = None    # YOU decide: true = a "no reply" reminder belongs on it
-    note: str | None = None
+class NeedsReplyKey(AnswerKey):
+    items: list[NeedsReplyItem]
 
 
-class FollowUpAnswerKey(AnswerKey):
-    candidates: list[FollowUpCandidate]
-
-
-Importance = Literal["low", "normal", "high"]
-Category = Literal["important", "team", "vip", "news", "social", "other"]
-
-
-class SortCandidate(BaseModel):
-    thread_id: str
-    subject: str | None = None
-    mailbox: str | None = None
-    counterpart: str | None = None
-    newest_real_from: Literal["us", "them"] | None = None
-    newest_real_text: str = ""
-    proposed_importance: Importance
-    proposed_category: Category
-    reason: str
-    importance: Importance | Literal["any"] | None = None          # YOU decide (any = either answer is fine)
-    split_category: Category | Literal["any"] | None = None
-    note: str | None = None
-
-
-class SortAnswerKey(AnswerKey):
-    candidates: list[SortCandidate]
+class PriceKey(AnswerKey):
+    items: list[PriceItem]
 
 
 # ── tasks, saved runs, verdicts ───────────────────────────────────────────────
 
-PredicateName = Literal["needs_reply_flagged", "price_agreements_recorded", "summaries_written", "followups_created",
-                        "memory_recorded", "inbox_sorted", "refused_without_writes"]
+PredicateName = Literal["needs_reply_flagged", "price_agreements_recorded", "summaries_written", "memory_recorded",
+                        "refused_without_writes"]
 VerdictStatus = Literal["approve", "revise", "unevaluated"]
 
 
@@ -138,7 +68,6 @@ class Task(BaseModel):
     instance: str
     predicate: PredicateName | None = None             # one check (the original form) …
     predicates: list[PredicateSpec] = Field(default_factory=list)   # … or several; the verdict is the worst
-    as_of: date | None = None              # pin "today"; None = the real date
     mailboxes: list[str] | None = None     # addresses to work in; None = the instance default (config.INSTANCES)
     max_minutes: float | None = Field(default=None, gt=0)   # official run: this task's time cap (None = the default)
     note: str | None = None

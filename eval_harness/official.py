@@ -9,7 +9,8 @@
 
 The AgentSwitch runner (agentswitch-harness.toml) runs this once per instance, against a fresh copy of that instance,
 with six variables and nothing else: AGENTSWITCH_BASE_URL, AGENTSWITCH_TOKEN, AGENTSWITCH_INSTANCE, OPENAI_BASE_URL,
-OPENAI_API_KEY, OPENAI_MODEL. It then reads results.json. What this does:
+OPENAI_API_KEY, OPENAI_MODEL (since Release 13 also AGENTSWITCH_SECONDS_LEFT and AGENTSWITCH_DEADLINE, both optional
+here). It then reads results.json. What this does:
 
 1. Two connection checks: the platform (who we are, by REST, and every MCP tool our skills need, with the seat token)
    and the model (one schema-bound JSON reply from OPENAI_MODEL).
@@ -17,8 +18,9 @@ OPENAI_API_KEY, OPENAI_MODEL. It then reads results.json. What this does:
    answer keys are decided), each scored right after its run with our own checks (score.py): approve → passed;
    revise and unevaluated → not passed.
 3. results.json is rewritten after every row, so a run stopped at the time limit still leaves a valid file. Each task
-   has its own time cap (default 8 minutes, `max_minutes:` in tasks.yaml) inside the overall budget (27 minutes); a
-   task that no longer fits is written as not run. Anything unexpected becomes a `runner-crash` row, and the last row
+   has its own time cap (default 8 minutes, `max_minutes:` in tasks.yaml) inside the overall budget (27 minutes, or
+   less when the runner says less time is left); a task that no longer fits is written as not run. Once the model
+   answers 429 `budget_exhausted` (the run's token budget is spent), the remaining tasks are written as not run. Anything unexpected becomes a `runner-crash` row, and the last row
    (`result-contract`) checks the rows themselves. The exit code is always 0: the runner scores results.json.
 
 It reads no .env, and uses only the runner's model (provider "openai", no fallback, full-text search), so a local
@@ -47,7 +49,7 @@ from email_agent.common.skill_registry import SkillRegistry
 from email_agent.config import INSTANCES, PROJECT_ROOT, Settings
 from email_agent.contracts.llm import ChatMessage, LlmRequest
 from email_agent.graph.capabilities import GRAPH_CAPABILITIES
-from email_agent.llm.route import Llm, make_llm
+from email_agent.llm.route import Llm, RoutedLlm, make_llm
 from email_agent.platform.action import LOCAL_TOOLS
 from email_agent.platform.mcp_session import McpSession
 from email_agent.platform.rest import RestClient
@@ -59,10 +61,12 @@ from eval_harness.run import load_tasks, new_batch, run_task
 from eval_harness.score import render, verdict_of
 from eval_harness.view import write_batch_view
 
+log = logging.getLogger(__name__)
 BUDGET_MIN = 27.0           # of the runner's 30-minute limit: the rest is for scoring and writing the last rows
 TASK_MAX_MIN = 8.0          # one task's cap unless tasks.yaml says otherwise (live runs of the ready tasks: < 4 min)
 MIN_TASK_S = 60.0           # a task is started only with at least this much time left
 SCORE_RESERVE_S = 45.0      # kept back from a task's run for reading the database and scoring it
+END_RESERVE_S = 180.0       # kept back from the runner's own time left, as 27 of its 30 minutes are
 CHECK_TIMEOUT_S = 120.0     # each connection check
 MODEL_CHECK_SCHEMA = {"title": "ModelCheck", "type": "object", "properties": {"ok": {"type": "boolean"}},
                       "required": ["ok"]}
@@ -74,6 +78,40 @@ def missing_settings(settings: Settings) -> list[str]:
               "AGENTSWITCH_INSTANCE": settings.agentswitch_instance, "OPENAI_API_KEY": settings.openai_api_key,
               "OPENAI_MODEL": settings.openai_model}
     return [name for name, value in wanted.items() if not value]
+
+
+def runner_seconds_left(settings: Settings, now: datetime | None = None) -> tuple[float | None, str]:
+    """(seconds the runner says are left, where that came from): AGENTSWITCH_SECONDS_LEFT, else AGENTSWITCH_DEADLINE
+    (an ISO-8601 time, or epoch seconds or milliseconds). (None, why) when neither is given or readable."""
+    if settings.agentswitch_seconds_left:
+        try:
+            return float(settings.agentswitch_seconds_left), "AGENTSWITCH_SECONDS_LEFT"
+        except ValueError:
+            log.warning("AGENTSWITCH_SECONDS_LEFT is not a number of seconds; ignored")
+    if settings.agentswitch_deadline:
+        now = now or datetime.now(timezone.utc)
+        text = settings.agentswitch_deadline.strip()
+        try:
+            epoch = float(text)
+            end = datetime.fromtimestamp(epoch / 1000 if epoch > 1e11 else epoch, timezone.utc)
+        except ValueError:
+            try:
+                end = datetime.fromisoformat(text)
+            except ValueError:
+                log.warning("AGENTSWITCH_DEADLINE is not a time we can read; ignored")
+                return None, "unreadable"
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+        return (end - now).total_seconds(), "AGENTSWITCH_DEADLINE"
+    return None, "not given"
+
+
+def run_budget_s(settings: Settings, budget_min: float) -> tuple[float, str]:
+    """The time to keep starting tasks in: `budget_min`, or less when the runner says less is left."""
+    left, source = runner_seconds_left(settings)
+    if left is None or left - END_RESERVE_S >= budget_min * 60:
+        return budget_min * 60, f"budget {budget_min:.0f} min"
+    return max(0.0, left - END_RESERVE_S), f"budget {max(0.0, left - END_RESERVE_S) / 60:.1f} min (from {source})"
 
 
 def official_settings(settings: Settings) -> Settings:
@@ -247,7 +285,8 @@ async def official_run(settings: Settings, results_path: Path, *, check_only: bo
 
 async def _run(settings: Settings, results: Results, *, check_only: bool, only: list[str] | None, ready_only: bool,
                budget_min: float, task_max_min: float, llm: Llm | None, tasks: list[Task] | None) -> None:
-    deadline = time.monotonic() + budget_min * 60
+    budget_s, budget_text = run_budget_s(settings, budget_min)
+    deadline = time.monotonic() + budget_s
     instance = results.instance
     missing = missing_settings(settings)
     if missing or instance not in INSTANCES:
@@ -256,7 +295,7 @@ async def _run(settings: Settings, results: Results, *, check_only: bool, only: 
         results.add("setup", "The AgentSwitch runner's variables are all set", False, why)
         return
     settings = official_settings(settings)
-    print(f"official run on {instance}: model {settings.openai_model}, budget {budget_min:.0f} min, "
+    print(f"official run on {instance}: model {settings.openai_model}, {budget_text}, "
           f"{task_max_min:.0f} min per task", flush=True)
 
     started = time.monotonic()
@@ -278,8 +317,11 @@ async def _run(settings: Settings, results: Results, *, check_only: bool, only: 
         ("the platform check failed" if not platform_ok else "the model check failed")
     batch = new_batch()
     verdicts: list[Verdict] = []
+    route = llm or make_llm(settings)                    # the agent's runs share this route and its health
     for task in chosen:
         left = deadline - time.monotonic()
+        if not blocked and isinstance(route, RoutedLlm) and route.budget_spent():
+            blocked = "the model's token budget is spent (429 budget_exhausted)"
         if blocked or left < MIN_TASK_S:
             results.add(task.id, title_of(task), False, f"not run: {blocked or 'time budget'}")
             continue

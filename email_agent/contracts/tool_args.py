@@ -8,67 +8,25 @@ Serialise with model_dump(exclude_unset=True) — update models carry schema def
 from __future__ import annotations
 
 from datetime import date
-from enum import StrEnum
-from typing import Any
+from enum import Enum, IntEnum, StrEnum
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, RootModel, conint, constr
-
-
-class Risk(StrEnum):
-    read = 'read'
-    write = 'write'
-    destructive = 'destructive'
-
-
-class ToolsSearchInput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    query: constr(min_length=1) = Field(
-        ..., description='Words or an abbreviation (PO, WO, QI, MR).'
-    )
-    module: constr(min_length=1) | None = Field(
-        None, description='Restrict to one module, e.g. manufacturing.'
-    )
-    risk: Risk | None = Field(None, description="Restrict by the tool's risk class.")
-    limit: conint(ge=1, le=50) | None = 25
-
-
-class ToolsSearchOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    status: str
-    results: Any
-
-
-class Name(RootModel[constr(min_length=1, max_length=128)]):
-    root: constr(min_length=1, max_length=128)
-
-
-class ToolsDescribeInput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    names: list[Name] = Field(
-        ...,
-        description='Tool names, e.g. from tools.search.',
-        max_length=50,
-        min_length=1,
-    )
-
-
-class ToolsDescribeOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    status: str
-    results: Any
+from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, Field, RootModel, conint, constr
 
 
 class SortOrder(StrEnum):
     asc = 'asc'
     desc = 'desc'
+
+
+class IsDefault(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
+class IsActive(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
 class ConnectionStatus(StrEnum):
@@ -92,32 +50,47 @@ class MailboxListInput(BaseModel):
     sort_order: SortOrder | None = 'desc'
     search: str | None = None
     display_name: str | None = None
-    is_default: bool | None = False
-    is_active: bool | None = True
+    is_default: bool | IsDefault | None = None
+    is_active: bool | IsActive | None = None
     sync_state: str | None = None
-    last_synced_at: date | None = None
-    connection_status: ConnectionStatus | None = 'not_configured'
-    last_status_change_at: date | None = None
+    last_synced_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
+    connection_status: ConnectionStatus | None = None
+    last_status_change_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
     last_status_message: str | None = None
-    consecutive_failures: float | None = 0
-    next_retry_at: date | None = None
+    consecutive_failures: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
+    next_retry_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
+    id: constr(min_length=1) | None = None
+    updated_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    updated_by: str | None = None
+    created_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    created_by: str | None = None
 
 
-class Datum(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    id: constr(min_length=1)
+class HasAttachments(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
-class MailboxListOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    data: list[Datum]
-    total: conint(ge=0)
-    limit: conint(ge=0)
-    offset: conint(ge=0)
+class IsRead(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
+class IsStarred(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
 class StarType(StrEnum):
@@ -140,6 +113,16 @@ class StarType(StrEnum):
     blue_flag = 'blue-flag'
     purple_flag = 'purple-flag'
     gray_flag = 'gray-flag'
+
+
+class IsPinned(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
+class IsMuted(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
 class Folder(StrEnum):
@@ -195,42 +178,71 @@ class EmailThreadListInput(BaseModel):
     external_thread_id: str | None = None
     participant_emails: str | None = None
     participant_names: str | None = None
-    message_count: float | None = 0
-    unread_count: float | None = 0
-    last_message_at: date | None = None
+    message_count: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
+    unread_count: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
+    last_message_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
     last_sender_email: str | None = None
     last_sender_name: str | None = None
     snippet: str | None = None
-    has_attachments: bool | None = False
-    total_attachment_count: float | None = 0
-    total_size_bytes: float | None = 0
-    is_read: bool | None = False
-    is_starred: bool | None = False
+    has_attachments: bool | HasAttachments | None = None
+    total_attachment_count: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
+    total_size_bytes: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
+    is_read: bool | IsRead | None = None
+    is_starred: bool | IsStarred | None = None
     star_type: StarType | None = None
-    is_pinned: bool | None = False
-    is_muted: bool | None = False
+    is_pinned: bool | IsPinned | None = None
+    is_muted: bool | IsMuted | None = None
     folder: Folder | None = None
-    labels: str | None = None
     split_category: SplitCategory | None = None
     inference_class: InferenceClass | None = None
     importance: Importance | None = None
     flag_status: FlagStatus | None = None
-    flag_due_date: date | None = None
+    flag_due_date: (
+        date | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})*|eq:\d{4}-\d{2}-\d{2}|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}|today)|between:(?:\d{4}-\d{2}-\d{2}|today)?,(?:\d{4}-\d{2}-\d{2}|today)?|\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})+)$') | None
+    ) = None
     party_id: constr(min_length=1) | None = None
     deal_id: constr(min_length=1) | None = None
     summary: str | None = None
-    summary_updated_at: date | None = None
-    snoozed_until: date | None = None
+    summary_updated_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
+    snoozed_until: (
+        date | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})*|eq:\d{4}-\d{2}-\d{2}|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}|today)|between:(?:\d{4}-\d{2}-\d{2}|today)?,(?:\d{4}-\d{2}-\d{2}|today)?|\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})+)$') | None
+    ) = None
+    id: constr(min_length=1) | None = None
+    updated_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    updated_by: str | None = None
+    created_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    created_by: str | None = None
 
 
-class EmailThreadListOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    data: list[Datum]
-    total: conint(ge=0)
-    limit: conint(ge=0)
-    offset: conint(ge=0)
+class IsDraft(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
+class IsAnswered(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
+class IsForwarded(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
 class Sensitivity(StrEnum):
@@ -245,10 +257,35 @@ class ReminderCondition(StrEnum):
     no_reply = 'no_reply'
 
 
+class ReadReceiptEnabled(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
+class DeliveryReceiptEnabled(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
 class Encryption(StrEnum):
     none = 'none'
     tls = 'tls'
     pgp = 'pgp'
+
+
+class PgpSigned(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
+class HasTrackingPixels(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
+class TrackingPixelsBlocked(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
 class SpfResult(StrEnum):
@@ -337,149 +374,223 @@ class EmailMessageListInput(BaseModel):
     snippet: str | None = None
     folder: Folder | None = None
     server_folder: str | None = None
-    local_state_version: float | None = 0
-    synced_state_version: float | None = 0
-    labels: str | None = None
-    is_read: bool | None = False
-    is_starred: bool | None = False
+    local_state_version: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
+    synced_state_version: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
+    is_read: bool | IsRead | None = None
+    is_starred: bool | IsStarred | None = None
     star_type: StarType | None = None
-    is_pinned: bool | None = False
-    is_muted: bool | None = False
-    is_draft: bool | None = False
-    is_answered: bool | None = False
-    is_forwarded: bool | None = False
-    has_attachments: bool | None = False
-    attachment_count: float | None = 0
+    is_pinned: bool | IsPinned | None = None
+    is_muted: bool | IsMuted | None = None
+    is_draft: bool | IsDraft | None = None
+    is_answered: bool | IsAnswered | None = None
+    is_forwarded: bool | IsForwarded | None = None
+    has_attachments: bool | HasAttachments | None = None
+    attachment_count: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
     attachments: str | None = None
-    size_bytes: float | None = 0
+    size_bytes: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
     importance: Importance | None = None
     sensitivity: Sensitivity | None = None
     split_category: SplitCategory | None = None
     inference_class: InferenceClass | None = None
     flag_status: FlagStatus | None = None
-    flag_due_date: date | None = None
-    flag_completed_date: date | None = None
+    flag_due_date: (
+        date | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})*|eq:\d{4}-\d{2}-\d{2}|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}|today)|between:(?:\d{4}-\d{2}-\d{2}|today)?,(?:\d{4}-\d{2}-\d{2}|today)?|\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})+)$') | None
+    ) = None
+    flag_completed_date: (
+        date | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})*|eq:\d{4}-\d{2}-\d{2}|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}|today)|between:(?:\d{4}-\d{2}-\d{2}|today)?,(?:\d{4}-\d{2}-\d{2}|today)?|\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})+)$') | None
+    ) = None
     party_id: constr(min_length=1) | None = None
     campaign_recipient_id: constr(min_length=1) | None = None
     deal_id: constr(min_length=1) | None = None
-    status: str | None = 'draft'
-    snoozed_until: date | None = None
-    scheduled_send_at: date | None = None
+    quotation_id: constr(min_length=1) | None = None
+    status: str | None = None
+    snoozed_until: (
+        date | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})*|eq:\d{4}-\d{2}-\d{2}|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}|today)|between:(?:\d{4}-\d{2}-\d{2}|today)?,(?:\d{4}-\d{2}-\d{2}|today)?|\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})+)$') | None
+    ) = None
+    scheduled_send_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
     send_payload: str | None = None
-    send_attempt_count: float | None = 0
+    send_attempt_count: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
     last_send_error: str | None = None
-    reminder_at: date | None = None
+    reminder_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
     reminder_condition: ReminderCondition | None = None
-    read_receipt_enabled: bool | None = False
-    delivery_receipt_enabled: bool | None = False
-    first_read_at: date | None = None
-    read_count: float | None = 0
+    read_receipt_enabled: bool | ReadReceiptEnabled | None = None
+    delivery_receipt_enabled: bool | DeliveryReceiptEnabled | None = None
+    first_read_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
+    read_count: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
     read_device: str | None = None
     encryption: Encryption | None = None
-    pgp_signed: bool | None = False
-    has_tracking_pixels: bool | None = False
-    tracking_pixels_blocked: bool | None = True
-    phishing_score: float | None = 0
+    pgp_signed: bool | PgpSigned | None = None
+    has_tracking_pixels: bool | HasTrackingPixels | None = None
+    tracking_pixels_blocked: bool | TrackingPixelsBlocked | None = None
+    phishing_score: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
     phishing_reasons: str | None = None
     phishing_model: str | None = None
     dest_isp: str | None = None
-    recipient_count: float | None = 0
+    recipient_count: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
     send_session_country: str | None = None
-    spam_score: float | None = 0
+    spam_score: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
     raw_headers: str | None = None
     list_unsubscribe: str | None = None
-    spf_result: SpfResult | None = 'none'
-    dkim_result: DkimResult | None = 'none'
-    dmarc_result: DmarcResult | None = 'none'
-    auth_summary: AuthSummary | None = 'none'
-    smime_status: SmimeStatus | None = 'none'
+    spf_result: SpfResult | None = None
+    dkim_result: DkimResult | None = None
+    dmarc_result: DmarcResult | None = None
+    auth_summary: AuthSummary | None = None
+    smime_status: SmimeStatus | None = None
     smime_signer_email: EmailStr | None = None
-    sent_at: date | None = None
-    received_at: date | None = None
-    deleted_at: date | None = None
+    sent_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
+    received_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
+    deleted_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
     source_provider: SourceProvider | None = None
     source_labels: str | None = None
     source_uid: str | None = None
-
-
-class EmailMessageListOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    data: list[Datum]
-    total: conint(ge=0)
-    limit: conint(ge=0)
-    offset: conint(ge=0)
+    updated_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    id: constr(min_length=1) | None = None
+    created_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    created_by: str | None = None
+    updated_by: str | None = None
 
 
 class EmailThreadGetInput(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    id: constr(min_length=1)
+    id: UUID
 
 
-class EmailThreadGetOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    id: constr(min_length=1)
+class StarType2(Enum):
+    star = 'star'
+    red_star = 'red-star'
+    orange_star = 'orange-star'
+    green_star = 'green-star'
+    blue_star = 'blue-star'
+    purple_star = 'purple-star'
+    red_bang = 'red-bang'
+    orange_guillemet = 'orange-guillemet'
+    yellow_bang = 'yellow-bang'
+    green_check = 'green-check'
+    blue_info = 'blue-info'
+    purple_question = 'purple-question'
+    red_flag = 'red-flag'
+    orange_flag = 'orange-flag'
+    yellow_flag = 'yellow-flag'
+    green_flag = 'green-flag'
+    blue_flag = 'blue-flag'
+    purple_flag = 'purple-flag'
+    gray_flag = 'gray-flag'
+    NoneType_None = None
+
+
+class Folder2(Enum):
+    inbox = 'inbox'
+    sent = 'sent'
+    drafts = 'drafts'
+    trash = 'trash'
+    spam = 'spam'
+    archive = 'archive'
+    snoozed = 'snoozed'
+    scheduled = 'scheduled'
+    outbox = 'outbox'
+    NoneType_None = None
+
+
+class Label(RootModel[constr(min_length=8)]):
+    root: constr(min_length=8)
+
+
+class SplitCategory2(Enum):
+    important = 'important'
+    team = 'team'
+    vip = 'vip'
+    news = 'news'
+    social = 'social'
+    other = 'other'
+    NoneType_None = None
+
+
+class InferenceClass2(Enum):
+    focused = 'focused'
+    other = 'other'
+    NoneType_None = None
+
+
+class Importance2(Enum):
+    low = 'low'
+    normal = 'normal'
+    high = 'high'
+    NoneType_None = None
+
+
+class FlagStatus2(Enum):
+    not_flagged = 'not_flagged'
+    flagged = 'flagged'
+    complete = 'complete'
+    NoneType_None = None
 
 
 class EmailThreadUpdateInput(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    id: constr(min_length=1)
+    id: UUID
     company_id: constr(min_length=1) | None = None
     subject: str | None = None
     mailbox_id: constr(min_length=1) | None = None
     external_thread_id: str | None = None
     participant_emails: str | None = None
     participant_names: str | None = None
-    message_count: float | None = 0
-    unread_count: float | None = 0
-    last_message_at: (
-        constr(
-            pattern=r'^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}(:?\d{2})?)?)?$'
-        )
-        | None
-    ) = None
-    last_sender_email: str | None = None
-    last_sender_name: str | None = None
-    snippet: str | None = None
-    has_attachments: bool | None = False
-    total_attachment_count: float | None = 0
-    total_size_bytes: float | None = 0
-    is_read: bool | None = False
-    is_starred: bool | None = False
-    star_type: StarType | None = None
-    is_pinned: bool | None = False
-    is_muted: bool | None = False
-    folder: Folder | None = None
-    labels: str | None = None
-    split_category: SplitCategory | None = None
-    inference_class: InferenceClass | None = None
-    importance: Importance | None = None
-    flag_status: FlagStatus | None = None
+    is_read: bool | None = None
+    is_starred: bool | None = None
+    star_type: StarType2 | None = None
+    is_pinned: bool | None = None
+    is_muted: bool | None = None
+    folder: Folder2 | None = None
+    labels: list[Label] | None = Field(None, description='Array of reference IDs for EmailLabel records.')
+    split_category: SplitCategory2 | None = None
+    inference_class: InferenceClass2 | None = None
+    importance: Importance2 | None = None
+    flag_status: FlagStatus2 | None = None
     flag_due_date: date | None = None
     party_id: constr(min_length=1) | None = None
     deal_id: constr(min_length=1) | None = None
     summary: str | None = None
     summary_updated_at: (
-        constr(
-            pattern=r'^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}(:?\d{2})?)?)?$'
-        )
-        | None
+        constr(pattern=r'^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}(:?\d{2})?)?)?$') | None
     ) = None
     snoozed_until: date | None = None
-
-
-class EmailThreadUpdateOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    id: constr(min_length=1)
 
 
 class Category(StrEnum):
@@ -507,21 +618,44 @@ class AgentMemoryCreateInput(BaseModel):
     importance: float | None = None
     is_active: bool | None = True
     expires_at: (
-        constr(
-            pattern=r'^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}(:?\d{2})?)?)?$'
-        )
-        | None
+        constr(pattern=r'^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}(:?\d{2})?)?)?$') | None
     ) = None
     source: Source | None = None
     company_id: constr(min_length=1) | None = None
     user_id: str | None = None
 
 
-class AgentMemoryCreateOutput(BaseModel):
+class AgentMemoryListInput(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    id: constr(min_length=1)
+    limit: conint(ge=0, le=1000) | None = 20
+    offset: conint(ge=0) | None = 0
+    sort_by: str | None = None
+    sort_order: SortOrder | None = 'desc'
+    search: str | None = None
+    party_id: constr(min_length=1) | None = None
+    session_id: constr(min_length=1) | None = None
+    category: Category | None = None
+    importance: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
+    is_active: bool | IsActive | None = None
+    expires_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
+    source: Source | None = None
+    company_id: constr(min_length=1) | None = None
+    user_id: str | None = None
+    created_by: str | None = None
+    updated_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    updated_by: str | None = None
+    id: constr(min_length=1) | None = None
+    created_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
 
 
 class Type(StrEnum):
@@ -547,19 +681,14 @@ class EmailReminderCreateInput(BaseModel):
     condition: Condition | None = None
     is_fired: bool | None = False
     fired_at: (
-        constr(
-            pattern=r'^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}(:?\d{2})?)?)?$'
-        )
-        | None
+        constr(pattern=r'^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}(:?\d{2})?)?)?$') | None
     ) = None
     note: str | None = None
 
 
-class EmailReminderCreateOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    id: constr(min_length=1)
+class IsFired(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
 class EmailReminderListInput(BaseModel):
@@ -575,65 +704,41 @@ class EmailReminderListInput(BaseModel):
     message_id: constr(min_length=1) | None = None
     thread_id: constr(min_length=1) | None = None
     type: Type | None = None
-    remind_at: date | None = None
+    remind_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
     condition: Condition | None = None
-    is_fired: bool | None = False
-    fired_at: date | None = None
+    is_fired: bool | IsFired | None = None
+    fired_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
     note: str | None = None
-
-
-class EmailReminderListOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    data: list[Datum]
-    total: conint(ge=0)
-    limit: conint(ge=0)
-    offset: conint(ge=0)
+    created_by: str | None = None
+    updated_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    updated_by: str | None = None
+    id: constr(min_length=1) | None = None
+    created_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
 
 
 class DealGetInput(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    id: constr(min_length=1)
+    id: UUID
 
 
-class DealGetOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    id: constr(min_length=1)
+class IsVip(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
-class AgentMemoryListInput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    limit: conint(ge=0, le=1000) | None = 20
-    offset: conint(ge=0) | None = 0
-    sort_by: str | None = None
-    sort_order: SortOrder | None = 'desc'
-    search: str | None = None
-    party_id: constr(min_length=1) | None = None
-    session_id: constr(min_length=1) | None = None
-    category: Category | None = None
-    importance: float | None = None
-    is_active: bool | None = True
-    expires_at: date | None = None
-    source: Source | None = None
-    company_id: constr(min_length=1) | None = None
-    user_id: str | None = None
-
-
-class AgentMemoryListOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    data: list[Datum]
-    total: conint(ge=0)
-    limit: conint(ge=0)
-    offset: conint(ge=0)
+class IsBlocked(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
 class BlockedReason(StrEnum):
@@ -656,13 +761,21 @@ class EmailContactListInput(BaseModel):
     name: str | None = None
     party_id: constr(min_length=1) | None = None
     company_id: constr(min_length=1) | None = None
-    frequency: float | None = 0
-    last_sent_at: date | None = None
-    last_received_at: date | None = None
-    is_vip: bool | None = False
-    is_blocked: bool | None = False
+    frequency: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
+    last_sent_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
+    last_received_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
+    is_vip: bool | IsVip | None = None
+    is_blocked: bool | IsBlocked | None = None
     blocked_reason: BlockedReason | None = None
-    blocked_at: date | None = None
+    blocked_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
     avatar_url: str | None = None
     domain: str | None = None
     user_id: str | None = None
@@ -670,44 +783,29 @@ class EmailContactListInput(BaseModel):
     organization: str | None = None
     job_title: str | None = None
     notes: str | None = None
-
-
-class EmailContactListOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    data: list[Datum]
-    total: conint(ge=0)
-    limit: conint(ge=0)
-    offset: conint(ge=0)
+    id: constr(min_length=1) | None = None
+    updated_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    updated_by: str | None = None
+    created_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    created_by: str | None = None
 
 
 class EmailMessageGetInput(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    id: constr(min_length=1)
-
-
-class EmailMessageGetOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    id: constr(min_length=1)
+    id: UUID
 
 
 class PartyGetInput(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    id: constr(min_length=1)
-
-
-class PartyGetOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    id: constr(min_length=1)
+    id: UUID
 
 
 class Salutation(StrEnum):
@@ -721,6 +819,11 @@ class Salutation(StrEnum):
 class Type2(StrEnum):
     individual = 'individual'
     organization = 'organization'
+
+
+class AllowDuplicate(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
 class GstTreatment(StrEnum):
@@ -744,10 +847,30 @@ class CustomerSubType(StrEnum):
     individual = 'individual'
 
 
+class PortalEnabled(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
+class IsPortalEnabled(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
+class Taxable(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
+
+
 class MsmeType(StrEnum):
     micro = 'micro'
     small = 'small'
     medium = 'medium'
+
+
+class IsMsme(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
 class UsTaxClassification(StrEnum):
@@ -769,20 +892,15 @@ class TinType(StrEnum):
     atin = 'atin'
 
 
-class Form1099Type(StrEnum):
-    field_1099_NEC = '1099-NEC'
-    field_1099_MISC = '1099-MISC'
+class BackupWithholding(IntEnum):
+    integer_0 = 0
+    integer_1 = 1
 
 
-class Form1099Box(StrEnum):
-    NEC_1 = 'NEC-1'
-    MISC_1 = 'MISC-1'
-    MISC_2 = 'MISC-2'
-    MISC_3 = 'MISC-3'
-    MISC_5 = 'MISC-5'
-    MISC_6 = 'MISC-6'
-    MISC_10 = 'MISC-10'
-    MISC_14 = 'MISC-14'
+class PrivacyState(StrEnum):
+    normal = 'normal'
+    restricted = 'restricted'
+    erased = 'erased'
 
 
 class PartyListInput(BaseModel):
@@ -804,8 +922,12 @@ class PartyListInput(BaseModel):
     email: EmailStr | None = None
     phone: str | None = None
     image: str | None = None
-    birthday: date | None = None
-    anniversary: date | None = None
+    birthday: (
+        date | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})*|eq:\d{4}-\d{2}-\d{2}|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}|today)|between:(?:\d{4}-\d{2}-\d{2}|today)?,(?:\d{4}-\d{2}-\d{2}|today)?|\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})+)$') | None
+    ) = None
+    anniversary: (
+        date | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})*|eq:\d{4}-\d{2}-\d{2}|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}|today)|between:(?:\d{4}-\d{2}-\d{2}|today)?,(?:\d{4}-\d{2}-\d{2}|today)?|\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})+)$') | None
+    ) = None
     nickname: str | None = None
     pronouns: str | None = None
     job_title: str | None = None
@@ -814,64 +936,72 @@ class PartyListInput(BaseModel):
     photo_url: str | None = None
     vcard_uid: str | None = None
     vcard_rev: str | None = None
+    allow_duplicate: bool | AllowDuplicate | None = None
     gst_treatment: GstTreatment | None = None
     place_of_supply: str | None = None
-    credit_limit: float | None = None
-    payment_terms: float | None = None
+    credit_limit: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
+    payment_terms: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
     payment_terms_label: str | None = None
     company_name: str | None = None
     contact_type: ContactType | None = None
     customer_sub_type: CustomerSubType | None = None
-    currency_id: str | None = 'locale:base_currency'
-    opening_balance: float | None = 0
-    portal_enabled: bool | None = False
-    is_portal_enabled: bool | None = False
+    currency_id: str | None = None
+    opening_balance: (
+        float | constr(pattern=r'^(?:ne:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*|(?:gt|lt|gte|lte|eq):-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|between:(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?,(?:-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:,-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)+)$') | None
+    ) = None
+    portal_enabled: bool | PortalEnabled | None = None
+    is_portal_enabled: bool | IsPortalEnabled | None = None
     website: str | None = None
     facebook: str | None = None
     twitter: str | None = None
-    taxable: bool | None = True
+    taxable: bool | Taxable | None = None
     tax_name: str | None = None
     tax_exemption_reason: str | None = None
     owner_name: str | None = None
     msme_type: MsmeType | None = None
-    is_msme: bool | None = False
+    is_msme: bool | IsMsme | None = None
     vendor_bank_name: str | None = None
     vendor_bank_code: str | None = None
     us_tax_classification: UsTaxClassification | None = None
     tin_type: TinType | None = None
-    w9_on_file: bool | None = False
-    w9_received_date: date | None = None
-    is_1099_vendor: bool | None = False
-    form_1099_type: Form1099Type | None = None
-    form_1099_box: Form1099Box | None = None
     exempt_payee_code: str | None = None
     fatca_exemption_code: str | None = None
-    backup_withholding: bool | None = False
-
-
-class PartyListOutput(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    data: list[Datum]
-    total: conint(ge=0)
-    limit: conint(ge=0)
-    offset: conint(ge=0)
+    backup_withholding: bool | BackupWithholding | None = None
+    privacy_state: PrivacyState | None = None
+    privacy_state_at: (
+        date | AwareDatetime | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$') | None
+    ) = None
+    privacy_state_reason: str | None = None
+    privacy_erase_not_before: (
+        date | constr(pattern=r'^(?:ne:\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})*|eq:\d{4}-\d{2}-\d{2}|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}|today)|between:(?:\d{4}-\d{2}-\d{2}|today)?,(?:\d{4}-\d{2}-\d{2}|today)?|\d{4}-\d{2}-\d{2}(?:,\d{4}-\d{2}-\d{2})+)$') | None
+    ) = None
+    privacy_request_id: constr(min_length=1) | None = None
+    id: constr(min_length=1) | None = None
+    created_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    created_by: str | None = None
+    updated_at: (
+        date | AwareDatetime | constr(pattern=r'^^(?:ne:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)*|eq:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?:gt|lt|gte|lte):(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)|between:(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?,(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|today)?|\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?:,\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)+)$$') | None
+    ) = None
+    updated_by: str | None = None
 
 # Tool name → its arguments model (used by email_agent/platform/action.py to validate every call).
 TOOL_ARGS: dict[str, type[BaseModel]] = {
-    'tools.search': ToolsSearchInput,
-    'tools.describe': ToolsDescribeInput,
     'Mailbox.list': MailboxListInput,
     'EmailThread.list': EmailThreadListInput,
     'EmailMessage.list': EmailMessageListInput,
     'EmailThread.get': EmailThreadGetInput,
     'EmailThread.update': EmailThreadUpdateInput,
     'AgentMemory.create': AgentMemoryCreateInput,
+    'AgentMemory.list': AgentMemoryListInput,
     'EmailReminder.create': EmailReminderCreateInput,
     'EmailReminder.list': EmailReminderListInput,
     'Deal.get': DealGetInput,
-    'AgentMemory.list': AgentMemoryListInput,
     'EmailContact.list': EmailContactListInput,
     'EmailMessage.get': EmailMessageGetInput,
     'Party.get': PartyGetInput,

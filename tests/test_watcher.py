@@ -22,14 +22,20 @@ TRIAGE = goal("Find the conversations that need our reply today", "triage-replie
 
 
 def _reply_check(**ceilings) -> Subscription:
-    return Subscription(id="reply-check", instances=["suryodaya"], event_types=["new_inbound"],
-                        request="What needs my reply today?", **ceilings)
+    return Subscription(
+        id="reply-check",
+        instances=["suryodaya"],
+        event_types=["new_inbound"],
+        request="What needs my reply today?",
+        **ceilings,
+    )
 
 
 def _watcher(settings, model=None, sub=None) -> Watcher:
     model = model or ScriptedModel(goals=[TRIAGE], verdict=lambda t: {"needs_reply": True, "why": "they ask"})
-    return Watcher(settings, "suryodaya", run=partial(agent.run, llm=model, today=TODAY),
-                   subscriptions=[sub or _reply_check()])
+    return Watcher(
+        settings, "suryodaya", run=partial(agent.run, llm=model, today=TODAY), subscriptions=[sub or _reply_check()]
+    )
 
 
 async def test_a_new_inbound_mail_starts_one_dry_run_scoped_to_its_conversation(settings, platform, mail):
@@ -55,7 +61,7 @@ async def test_our_own_write_does_not_wake_the_watcher_but_a_later_real_change_d
     w = _watcher(settings)
     await w.poll()
     model = ScriptedModel(goals=[TRIAGE], verdict=lambda t: {"needs_reply": True, "why": "they ask"})
-    await agent.run("What needs my reply today?", "suryodaya", settings, today=TODAY, llm=model)   # flags `asks`
+    await agent.run("What needs my reply today?", "suryodaya", settings, today=TODAY, llm=model)  # flags `asks`
 
     ours = await w.poll()
     platform.row("EmailThread", asks).update(flag_status="completed", updated_at=now(minutes=10))  # team 11, later
@@ -66,10 +72,11 @@ async def test_our_own_write_does_not_wake_the_watcher_but_a_later_real_change_d
     assert theirs.refused == {} and theirs.unmatched == 1, "admitted (no subscription wants thread changes)"
 
 
-async def test_the_history_read_on_the_first_poll_does_not_make_the_first_new_mail_look_like_a_flood(settings,
-                                                                                                    platform, mail):
+async def test_the_history_read_on_the_first_poll_does_not_make_the_first_new_mail_look_like_a_flood(
+    settings, platform, mail
+):
     busy = mail.conversation("Order status", them("Status?", now(minutes=-9)))
-    for n in range(40):                          # the last ten minutes: the first poll reads them again as history
+    for n in range(40):  # the last ten minutes: the first poll reads them again as history
         mail.say(busy, them(f"Status update {n}?", now(minutes=-8, seconds=n)))
     w = _watcher(settings)
     await w.poll()
@@ -116,13 +123,14 @@ async def test_the_daily_run_ceiling_holds_when_events_arrive_together(settings,
     assert report.refused == {"max_runs_per_day": 2}
 
 
-async def test_the_daily_model_call_ceiling_caps_a_run_and_refuses_the_next_before_a_run_slot_is_taken(settings,
-                                                                                                         platform, mail):
+async def test_the_daily_model_call_ceiling_caps_a_run_and_refuses_the_next_before_a_run_slot_is_taken(
+    settings, platform, mail
+):
     w = _watcher(settings, sub=_reply_check(max_llm_calls_per_day=5))
     mail.conversation("Old", them("Old mail.", "2026-10-03T09:00:00"))
     await w.poll()
     mail.conversation("First", them("First question?", now()))
-    first = await w.poll()                     # a full triage needs more than five model calls
+    first = await w.poll()  # a full triage needs more than five model calls
     mail.conversation("Second", them("Second question?", now(seconds=1)))
 
     second = await w.poll()

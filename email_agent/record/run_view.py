@@ -25,8 +25,8 @@ from pydantic import BaseModel, ValidationError
 
 from email_agent.contracts.agent import FinalAnswer, RunContext, RunRequest, WriteRecord
 from email_agent.contracts.graph import NodeState
-from email_agent.contracts.llm import LlmReply, Usage
-from email_agent.contracts.runlog import LlmStep, NodeStep, PlanStep, StepLine, SyncStep
+from email_agent.contracts.llm import Usage
+from email_agent.contracts.runlog import LlmStep, PlanStep, SyncStep
 from email_agent.contracts.view import (
     RunView,
     UndoMark,
@@ -52,36 +52,16 @@ PAGE = "view.html"
 ASSETS = Path(__file__).resolve().parent / "view"
 
 
-def _who(reply: LlmReply) -> str:
-    return f"{reply.provider or '?'}/{reply.model}" + (f" key #{reply.key_slot}" if reply.key_slot else "")
-
-
 def _seconds(start: datetime | None, end: datetime | None) -> float | None:
     return round((end - start).total_seconds(), 2) if start and end else None
 
 
-def _where(run_dir: Path) -> str:
+def resume_arg(run_dir: Path) -> str:
+    """What to pass to --resume for this run folder: its path, relative when it is under the working directory."""
     try:
         return str(run_dir.resolve().relative_to(Path.cwd()))
     except ValueError:
         return str(run_dir)
-
-
-def _older_lines(run_dir: Path) -> list[dict[str, Any]]:
-    """steps.jsonl lines no current step model reads (the old Perception/Decision loop), shown as they are."""
-    path = run_dir / "steps.jsonl"
-    out: list[dict[str, Any]] = []
-    for line in (path.read_text().splitlines() if path.exists() else []):
-        if not line.strip():
-            continue
-        try:
-            StepLine.model_validate({"step": json.loads(line)})
-        except (ValidationError, json.JSONDecodeError):
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                out.append({"unreadable": line[:2000]})
-    return out
 
 
 def _undo_marks(run_dir: Path) -> dict[tuple[str, str | None], str]:
@@ -121,7 +101,7 @@ def build_view(run_dir: Path) -> RunView:
             r = st.reply
             calls.append(ViewCall(
                 n=len(calls) + 1, layer=st.layer, node_id=st.node_id, round=st.iter, at=st.at, valid=st.valid,
-                error=st.error, answered_by=_who(r) if r else None, fallback_from=r.fallback_from if r else [],
+                error=st.error, answered_by=r.served_by if r else None, fallback_from=r.fallback_from if r else [],
                 reused=r.reused if r else False, usage=r.usage if r else Usage(),
                 seconds=round(r.elapsed_ms / 1000, 2) if r else None, system=st.request.system,
                 messages=st.request.messages, response_schema=st.request.response_schema, reply=r.text if r else None))
@@ -169,11 +149,6 @@ def build_view(run_dir: Path) -> RunView:
                 seconds=_seconds(n.started_at, n.ended_at), added_by=how, fanned_from=source,
                 calls=[c.n for c in calls if c.node_id == n.id],
                 writes=[w.n for w in writes if w.node_id == n.id]))
-    else:                                            # old loop: the node lines are all there is
-        for st in s.steps:
-            if isinstance(st, NodeStep):
-                nodes.append(ViewNode(id=st.node_id, capability=st.capability, goal_id=st.goal_id, state=st.state,
-                                      seconds=st.seconds, result={"summary": st.summary}))
 
     # ── checks ───────────────────────────────────────────────────────────────
     critics = [ViewCritic(node_id=e.node_id, goal_id=e.payload.get("goal_id"), ready=bool(e.payload.get("ready")),
@@ -215,7 +190,7 @@ def build_view(run_dir: Path) -> RunView:
                    answer=final.answer if final else None, nodes=nodes, edges=list(snap.edges) if snap else [],
                    rounds=rounds, critics=critics, validators=validators, scores=scores, calls=calls, writes=writes,
                    spans=_spans(run_dir) if has_graph else [], house_rules=rules or None,
-                   history=list(context.get("history") or []), sync=sync, older_lines=_older_lines(run_dir))
+                   history=list(context.get("history") or []), sync=sync)
     view.problems = _problems(view, events)
     return view
 
@@ -230,7 +205,7 @@ def _write(n: int, w: WriteRecord, o: Any, undo: dict[tuple[str, str | None], st
 def _next_step(run_dir: Path, snap: Any) -> str | None:
     if snap is None:
         return None
-    where = _where(run_dir)
+    where = resume_arg(run_dir)
     if any(n.state == NodeState.WAITING and n.wait and n.wait.event_type == "approval.received"
            for n in snap.nodes.values()):
         return f"uv run email-agent --resume {where} --approve   (or --reject to write nothing)"

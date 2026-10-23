@@ -11,7 +11,7 @@ Stage 7: long-term memory (layer 2) and episodes (layer 7), adapted from S17 `co
     own episodes, one MemoryRecord per row, with a full-text index (S17's lexical path; BUG-014: the platform's own
     memory search never matches).
   - Every record has a scope (instance → mailbox → party → conversation → run). A broader record is readable in a
-    narrower request, never the other way (S17 `_scope_where`): a Cardinal request reads Cardinal's and the company's
+    narrower request, never the other way (S17 `_scope_where`): a request about Acme reads Acme's and the company's
     memories, never another party's.
   - Every record has at least one source (S17: no durable memory without provenance). A memory we create keeps the
     request or message it came from, which the platform row cannot hold; a later sync keeps it.

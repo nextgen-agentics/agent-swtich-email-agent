@@ -195,7 +195,7 @@ function renderRun(v) {
   const graph = section("graph", "Graph", "How the run was built: the planner adds tasks round by round (dotted lines); a judge task splits the mailbox into batches (dashed); solid lines mean \"runs after\". Click a task for its input, result, model calls and writes.",
     v.header.has_graph ? h("div", { class: "graphbar" }, legend, h("label", {}, showRounds, " show planner rounds"),
       h("button", { onclick: () => window.__cy && window.__cy.fit(undefined, 30) }, "Fit")) : null,
-    v.header.has_graph ? cyBox : h("p", { class: "empty" }, "No graph: this run is from the old loop (before Revision 12), which kept no task graph."),
+    v.header.has_graph ? cyBox : h("p", { class: "empty" }, "No graph: the run stopped before its journal was created."),
     h("h3", {}, `Tasks (${v.nodes.length})`), v.nodes.length ? taskTable : h("p", { class: "empty" }, "No tasks."));
 
   // planner rounds
@@ -273,7 +273,6 @@ function renderRun(v) {
         h("tbody", {}, v.sync.tables.map((t) => h("tr", {}, h("td", {}, t.entity), h("td", {}, t.mailbox || "—"), h("td", {}, t.full ? "full" : "incremental"),
           h("td", { class: "num" }, t.calls), h("td", { class: "num" }, t.fetched), h("td", { class: "num" }, t.changed), h("td", { class: "num" }, t.deleted)))))))
       : h("p", { class: "empty" }, "Not synced in this run."),
-    v.older_lines.length ? fold(`${v.older_lines.length} log line(s) in the old loop's format`, pre(v.older_lines), { cls: "inner" }) : null,
     h("p", { class: "muted" }, `Page made ${time(v.generated_at)} from the files in the run folder.`));
 
   const nav = h("nav", { class: "side" }, h("div", { class: "brand" }, "Email agent run"), h("div", { class: "sub" }, H.run_id),

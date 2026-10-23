@@ -91,7 +91,7 @@ class NodeFailure(_Frozen):
 
 EventKind = Literal[
     # run
-    "run_started", "run_resumed", "context_built", "run_finished", "run_crashed", "run_interrupted",
+    "run_started", "run_resumed",
     # graph
     "graph_patched", "patch_rejected", "critic_reviewed", "fanned_out",
     # nodes

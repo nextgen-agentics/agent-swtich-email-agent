@@ -20,6 +20,11 @@ event loop, plus the SDK's handshake) and closing it (mcp_close_timeout_s: the S
 open and close waited on httpx's 300 s read timeout and on the synchronous REST token check (up to 3 tries × 60 s),
 which nothing could interrupt. A slow open raises McpCallError(kind="timeout"); a slow close drops the connection
 with a warning and the caller goes on.
+
+WORKAROUND(BUG-031): the SDK checks every tool reply against the output schema the tool declares, and refuses the
+whole reply on any mismatch. Since Release 13 (21 Oct) EmailThread.list declares `participant_names` as a string but
+returns a list, so every listing of conversations failed. A mismatch is now logged once per tool and kept in
+`schema_mismatches`; our own contracts (email_agent/contracts/platform.py, which accept both shapes) read the reply.
 """
 
 from __future__ import annotations
@@ -66,6 +71,7 @@ class McpSession:
         self._http: httpx2.AsyncClient | None = None
         self._client: Client | None = None
         self._limit = asyncio.Semaphore(max(1, settings.mcp_concurrency))   # graph nodes share one session
+        self.schema_mismatches: dict[str, str] = {}     # tool → the SDK's first complaint (WORKAROUND(BUG-031))
 
     # ── connection ───────────────────────────────────────────────────────────
     async def __aenter__(self) -> "McpSession":
@@ -84,6 +90,7 @@ class McpSession:
                 self._client = Client(streamable_http_client(self.instance.mcp_url, http_client=self._http),
                                       mode="legacy")
                 await self._client.__aenter__()
+                self._tolerate_schema_mismatches()
         except TimeoutError:
             self._client = None
             await self._drop_http()
@@ -112,6 +119,22 @@ class McpSession:
                     await http.aclose()
             except Exception:  # noqa: BLE001 — closing a dead connection must never stop the caller
                 logger.debug("closing the HTTP client failed", exc_info=True)
+
+    def _tolerate_schema_mismatches(self) -> None:
+        """WORKAROUND(BUG-031): a reply that breaks the tool's own declared output schema is logged, not refused."""
+        session = self.client.session
+        strict = session.validate_tool_result
+
+        async def tolerant(name: str, result: Any) -> None:
+            try:
+                await strict(name, result)
+            except RuntimeError as e:
+                if name not in self.schema_mismatches:
+                    self.schema_mismatches[name] = str(e)[:500]
+                    logger.warning("%s on %s: the reply does not match the tool's own output schema; read with our "
+                                   "contracts instead (BUG-031): %s", name, self.instance.name, str(e).splitlines()[0])
+
+        session.validate_tool_result = tolerant  # type: ignore[method-assign]
 
     @property
     def client(self) -> Client:

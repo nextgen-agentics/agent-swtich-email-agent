@@ -50,7 +50,6 @@ SERVICE_NAME = "team10-email-agent"
 NODE_END = {"node_succeeded": "succeeded", "node_failed": "failed", "node_cancelled": "cancelled",
             "node_waiting": "waiting"}
 WRITE_END = {"write_completed": "completed", "write_failed": "failed", "write_uncertain": "uncertain"}
-NODE_LEVEL = {"llm_call_started", "llm_call_finished", "write_started", *NODE_END, *WRITE_END}
 
 log = logging.getLogger(__name__)
 

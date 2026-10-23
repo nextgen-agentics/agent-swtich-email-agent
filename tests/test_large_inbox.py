@@ -25,8 +25,10 @@ def _model(**kw):
 
 
 async def test_a_large_inbox_is_judged_in_shards_and_the_answer_waits_for_all_of_them(settings, platform, mail):
-    waiting = {mail.conversation(f"Order {n}", them(f"Please confirm order {n}.", f"2026-10-04T09:{n:02d}:00"))
-               for n in range(45)}
+    waiting = {
+        mail.conversation(f"Order {n}", them(f"Please confirm order {n}.", f"2026-10-04T09:{n:02d}:00"))
+        for n in range(45)
+    }
     model = _model()
 
     out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model)
@@ -48,16 +50,26 @@ async def test_a_task_already_waiting_on_a_fan_out_waits_for_its_last_step(tmp_p
     class Planner:
         async def plan(self, graph, event):
             if event.kind == "run_started":
-                return GraphPatch(add=[TaskSpec(id="judge", capability="fan"), TaskSpec(id="answer", capability="answer")],
-                                  connect=[("judge", "answer")], reason="judge, then answer")
-            return GraphPatch(finish=event.node_id == "answer", reason="answered" if event.node_id == "answer" else "wait")
+                return GraphPatch(
+                    add=[TaskSpec(id="judge", capability="fan"), TaskSpec(id="answer", capability="answer")],
+                    connect=[("judge", "answer")],
+                    reason="judge, then answer",
+                )
+            return GraphPatch(
+                finish=event.node_id == "answer", reason="answered" if event.node_id == "answer" else "wait"
+            )
 
     async def fan(_task):
         shards = [TaskSpec(id=f"shard{n}", capability="work", wakes_planner=False) for n in (1, 2, 3)]
-        return FanOut(result={"shards": 3},
-                      patch=GraphPatch(add=[*shards, TaskSpec(id="write", capability="work")],
-                                       connect=[(s.id, "write") for s in shards], reason="3 shards",
-                                       metadata={"final": "write"}))
+        return FanOut(
+            result={"shards": 3},
+            patch=GraphPatch(
+                add=[*shards, TaskSpec(id="write", capability="work")],
+                connect=[(s.id, "write") for s in shards],
+                reason="3 shards",
+                metadata={"final": "write"},
+            ),
+        )
 
     async def work(task):
         await asyncio.sleep(0.01)
@@ -76,9 +88,10 @@ async def test_a_task_already_waiting_on_a_fan_out_waits_for_its_last_step(tmp_p
     assert ran[-2:] == ["write", "answer"]
 
 
-async def test_more_candidates_than_the_budget_allows_are_judged_newest_first_and_the_rest_reported(settings,
-                                                                                                    platform, mail):
-    settings.max_nodes = 10                      # less the judge node itself, join, check, write, answer: 5 shards
+async def test_more_candidates_than_the_budget_allows_are_judged_newest_first_and_the_rest_reported(
+    settings, platform, mail
+):
+    settings.max_nodes = 10  # less the judge node itself, join, check, write, answer: 5 shards
     for n in range(200):
         mail.conversation(f"Order {n}", them(f"Please confirm order {n}.", f"2026-10-04T{n // 60:02d}:{n % 60:02d}:00"))
     model = _model()
@@ -96,8 +109,10 @@ async def test_more_candidates_than_the_budget_allows_are_judged_newest_first_an
 
 async def test_with_the_second_model_on_every_conversation_to_be_written_is_checked_first(settings, platform, mail):
     settings.validate_verdicts = True
-    asks = {mail.conversation(f"Order {n}", them(f"Please confirm order {n}?", f"2026-10-04T09:{n:02d}:00"))
-            for n in range(60)}                 # more than 40 plus the 5 sampled from the rest
+    asks = {
+        mail.conversation(f"Order {n}", them(f"Please confirm order {n}?", f"2026-10-04T09:{n:02d}:00"))
+        for n in range(60)
+    }  # more than 40 plus the 5 sampled from the rest
     judge = _model(model="judge-model")
     second = _model(model="validator-model")
     route = RoutedLlm([Option("gemini", "judge-model", 1, judge), Option("openai", "validator-model", None, second)])
@@ -110,7 +125,7 @@ async def test_with_the_second_model_on_every_conversation_to_be_written_is_chec
 
 
 async def test_a_second_sync_of_an_unchanged_mailbox_reads_only_the_newest_page(settings, platform, mail):
-    for n in range(10):                                   # 1,200 messages: two pages of 1,000 on a full read
+    for n in range(10):  # 1,200 messages: two pages of 1,000 on a full read
         t = mail.conversation(f"Long thread {n}", them("Opening question.", "2026-06-01T08:00:00"))
         for k in range(119):
             mail.say(t, us(f"Note {k} on thread {n}.", f"2026-06-{1 + k // 5:02d}T{9 + k % 5:02d}:{n:02d}:00"))
@@ -127,8 +142,9 @@ async def test_a_second_sync_of_an_unchanged_mailbox_reads_only_the_newest_page(
 
 
 async def test_a_new_message_between_runs_is_picked_up_by_the_next_run(settings, platform, mail):
-    visit = mail.conversation("Visit", them("Can we visit Friday?", "2026-10-02T10:00:00"),
-                              us("Yes, Friday works.", "2026-10-02T15:00:00"))
+    visit = mail.conversation(
+        "Visit", them("Can we visit Friday?", "2026-10-02T10:00:00"), us("Yes, Friday works.", "2026-10-02T15:00:00")
+    )
     first = _model()
     await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=first, dry_run=True)
     assert first.calls("judge") == [], "nothing was waiting on us"
@@ -162,14 +178,21 @@ async def test_a_conversation_deleted_on_the_platform_leaves_the_local_copy_on_a
 async def test_rows_from_another_mailbox_in_a_listing_never_reach_the_model(settings, platform, mail):
     platform.leaks_other_mailboxes = True
     ours = mail.conversation("Samples", them("Could you send two samples?", "2026-10-04T09:00:00"))
-    theirs = mail.conversation("Team 11 secret price", them("Our cost is 310 per unit.", "2026-10-04T10:00:00"),
-                               mailbox=TEAM11)
+    theirs = mail.conversation(
+        "Team 11 secret price", them("Our cost is 310 per unit.", "2026-10-04T10:00:00"), mailbox=TEAM11
+    )
 
     def plan(body):
         if not body["graph"]:
-            return {"tasks": [task("judge_g1", "judge_threads", "g1", skill="triage-replies"),
-                              task("read_mail", "EmailMessage.list", "g1", limit=50)], "reason": "judge and read"}
+            return {
+                "tasks": [
+                    task("judge_g1", "judge_threads", "g1", skill="triage-replies"),
+                    task("read_mail", "EmailMessage.list", "g1", limit=50),
+                ],
+                "reason": "judge and read",
+            }
         return judge_then_answer(body)
+
     model = _model(plan=plan)
 
     out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model)

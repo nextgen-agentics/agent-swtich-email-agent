@@ -37,7 +37,6 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, ValidationError
 
-from email_agent.contracts import tool_args
 from email_agent.contracts.agent import (
     ActionResult,
     ConversationOverview,
@@ -155,7 +154,7 @@ class Action:
             args = model.model_validate(call.arguments)
         except ValidationError as e:
             return ActionResult(**base, kind="contract", ok=False, message=f"invalid arguments: {_errors(e)}")
-        if not (call.name.startswith("tools.") or tool_operation(call.name) in READ_OPS):
+        if tool_operation(call.name) not in READ_OPS:
             return await self._write_call(base, call.name, args)
         outcome = await self.mcp.call(call.name, args)
         if not outcome.ok:
@@ -195,13 +194,9 @@ class Action:
 
     # ── results ──────────────────────────────────────────────────────────────
     def _parse(self, name: str, data: Any) -> tuple[list[BaseModel], Any]:
-        """Typed rows for entity tools; the generated *Output* model for the others."""
+        """Typed rows for entity tools."""
         entity, op = tool_entity(name), tool_operation(name)
         row_model = ROW_MODELS.get(entity, Row)
-        if name.startswith("tools."):
-            out_model = getattr(tool_args, TOOL_ARGS[name].__name__.replace("Input", "Output"), None)
-            parsed = out_model.model_validate(data) if out_model else data
-            return [], (parsed.model_dump(mode="json", exclude_none=True) if out_model else data)
         if op == "list":
             page = list_page(row_model).model_validate(data)
             rows = [r for r in page.data if self._ours(r)]

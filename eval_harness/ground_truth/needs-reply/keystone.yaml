@@ -1,0 +1,277 @@
+# Answer key for 'needs-reply' on keystone. Set needs_reply: true or false.
+# What to decide from: docs/project/answer-key-decisions.md. null = undecided: the task scores
+# `unevaluated` and the official run leaves it out. Re-running the script keeps your decisions.
+instance: keystone
+as_of: '2026-09-29'
+our_mailboxes:
+- orders@keystoneprecision.com
+- team10@keystoneprecision.com
+items:
+- thread_id: df71b52e-3eb5-4c21-b32e-0a6e6675f36f
+  mailbox: orders@keystoneprecision.com
+  subject: Quote request - Machinist Bench Bracket Set
+  needs_reply: false
+- thread_id: b94c56d4-9a66-421e-8da0-a4801bf53dd1
+  mailbox: orders@keystoneprecision.com
+  subject: Quote request - Precision V-Block Pair, 2in Hardened
+  needs_reply: false
+- thread_id: d82db402-41c1-44e7-8a52-59f39fd97697
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0001 - Tillage Toolbar Mounting Plate, 22in
+  needs_reply: false
+- thread_id: 32567c9d-726c-44d5-a590-172918a6367a
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0003 - Cab Step Frame, powder coated
+  needs_reply: false
+- thread_id: 13f43ef1-97e5-4023-b137-768183cd4a9e
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0005 - Grain Cart Ladder Guard Weldment
+  needs_reply: false
+- thread_id: 747a1d00-0183-4dbc-88d8-0ddb8708727d
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0011 - Precision V-Block Pair, 2in Hardened
+  needs_reply: false
+- thread_id: 71f46ce0-ad2b-489a-a0a0-5e917f515166
+  mailbox: orders@keystoneprecision.com
+  subject: Remittance advice - INV-2026-00001
+  needs_reply: false
+- thread_id: 10eade7e-c56f-4d1e-98e9-834d8594eca5
+  mailbox: orders@keystoneprecision.com
+  subject: Remittance advice - INV-2026-00088
+  needs_reply: false
+- thread_id: 6e5b6dc5-e8ff-4c69-bfc1-4eddcea1a99b
+  mailbox: team10@keystoneprecision.com
+  subject: NCR - Cab Step Frame, powder coated - SO-2026-00032
+  needs_reply: false
+- thread_id: 5b4fcdf6-1ff7-484f-8bb3-2c67c0584a5e
+  mailbox: team10@keystoneprecision.com
+  subject: NCR - Cab Step Frame, powder coated - SO-2026-00062
+  needs_reply: false
+- thread_id: d0531161-e413-4adb-9525-b40f117f4c2f
+  mailbox: team10@keystoneprecision.com
+  subject: NCR - Cab Step Frame, powder coated - SO-2026-00107
+  needs_reply: false
+- thread_id: 53a0320d-ab10-4022-836d-e45393e7a95a
+  mailbox: team10@keystoneprecision.com
+  subject: NCR - Grain Cart Ladder Guard Weldment - SO-2026-00011
+  needs_reply: false
+- thread_id: f0da383e-018c-40ca-a5e7-ff8125e6c9a4
+  mailbox: team10@keystoneprecision.com
+  subject: NCR - Hydraulic Manifold Mount, machined - SO-2026-00128
+  needs_reply: false
+- thread_id: fba3b273-6597-4ce7-b2f5-f37622d4fdb8
+  mailbox: team10@keystoneprecision.com
+  subject: NCR - Tillage Toolbar Mounting Plate, 22in - SO-2026-00080
+  needs_reply: false
+- thread_id: 6509898f-9b55-45c7-b14f-71d91e1a6913
+  mailbox: orders@keystoneprecision.com
+  subject: PO BAP-481291 - order confirmation
+  needs_reply: false
+- thread_id: 77e76534-6899-4473-a4d3-8cad4f4bbe09
+  mailbox: orders@keystoneprecision.com
+  subject: PO GLI-404686 - order confirmation
+  needs_reply: false
+- thread_id: f821098b-fed0-4421-9023-b60cc29e12a3
+  mailbox: orders@keystoneprecision.com
+  subject: PO TSFE-453010 - order confirmation
+  needs_reply: false
+- thread_id: 4ccbc8be-3585-4c59-a2d4-5c220bf97d3a
+  mailbox: orders@keystoneprecision.com
+  subject: PO TSFE-465544 - order confirmation
+  needs_reply: false
+- thread_id: ae0da6fe-91c2-4ffb-9e18-445681a4cfde
+  mailbox: orders@keystoneprecision.com
+  subject: PO TSFE-476629 - order confirmation
+  needs_reply: false
+- thread_id: f85671d4-b739-4fca-9668-a145d6955e77
+  mailbox: team10@keystoneprecision.com
+  subject: Pull-in request - SO-2026-00010 / PO BAP-452504
+  needs_reply: false
+- thread_id: fe6418bb-16be-4978-ab30-69c03e2796d8
+  mailbox: team10@keystoneprecision.com
+  subject: Pull-in request - SO-2026-00046 / PO TSFE-492456
+  needs_reply: false
+- thread_id: 08dcb43e-a847-4368-b172-301e63c43b74
+  mailbox: team10@keystoneprecision.com
+  subject: Pull-in request - SO-2026-00067 / PO AHS-433026
+  needs_reply: false
+- thread_id: 3466c2ed-147e-42b1-beee-5a686f699c44
+  mailbox: team10@keystoneprecision.com
+  subject: Pull-in request - SO-2026-00085 / PO BAP-432375
+  needs_reply: false
+- thread_id: 07525e74-9693-4294-905f-e5bc0613d207
+  mailbox: team10@keystoneprecision.com
+  subject: Pull-in request - SO-2026-00133 / PO CTW-434901
+  needs_reply: false
+- thread_id: 2e105ca5-c660-4d14-b7ca-84e5334b98f0
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0002 - Tillage Toolbar Mounting Plate, 22in
+  needs_reply: true
+- thread_id: 60182cf8-254e-4479-a74d-8b277cd4e2b5
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0006 - Hydraulic Manifold Mount, machined
+  needs_reply: true
+- thread_id: a87ef1cd-1d1c-46e8-a347-71a3f4b2bd41
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0007 - Skid-Steer Quick-Attach Plate
+  needs_reply: true
+- thread_id: 45ffee97-2519-4af0-9ee1-b73288e2bd91
+  mailbox: team10@keystoneprecision.com
+  subject: Ship date check - SO-2026-00028 / PO CTW-400188
+  needs_reply: false
+- thread_id: 17ad9cac-5984-4e97-ab38-6357a9d91eea
+  mailbox: team10@keystoneprecision.com
+  subject: Ship date check - SO-2026-00094 / PO GLI-472238
+  needs_reply: false
+- thread_id: 5a7a5ef7-bbbb-47ca-a31b-5f7e02ae136b
+  mailbox: team10@keystoneprecision.com
+  subject: Ship date check - SO-2026-00115 / PO BAP-471234
+  needs_reply: false
+- thread_id: a4d9d925-0dd6-44ef-837e-f498e8109a99
+  mailbox: team10@keystoneprecision.com
+  subject: 2026 annual price review
+  needs_reply: false
+- thread_id: cc7371f2-1287-43aa-9ff4-07f7a868b0ae
+  mailbox: team10@keystoneprecision.com
+  subject: Capacity survey - 2027 model year program
+  needs_reply: false
+- thread_id: 3f8b03c7-ef36-4456-a804-f92bff5a4d9b
+  mailbox: team10@keystoneprecision.com
+  subject: Holiday shipping schedule
+  needs_reply: false
+- thread_id: f4cd8455-5621-4da0-a8dd-862bc60d2f7b
+  mailbox: orders@keystoneprecision.com
+  subject: Invoice INV-2026-00137 - PO reference missing?
+  needs_reply: false
+- thread_id: 63e184b9-4eae-4df7-8656-2cdb8ea23d04
+  mailbox: orders@keystoneprecision.com
+  subject: Invoice INV-2026-00141 - PO reference missing?
+  needs_reply: false
+- thread_id: 1da42fbc-998c-495e-b976-32c4837f36f2
+  mailbox: orders@keystoneprecision.com
+  subject: Invoice INV-2026-00144 - PO reference missing?
+  needs_reply: false
+- thread_id: 150cfc9e-f73d-4245-9856-ac1d6a36fc01
+  mailbox: orders@keystoneprecision.com
+  subject: Invoice INV-2026-00148 - PO reference missing?
+  needs_reply: false
+- thread_id: 0a99a6f2-8bec-4238-8a15-0f2fb72f5b18
+  mailbox: orders@keystoneprecision.com
+  subject: Invoice INV-2026-00152 - PO reference missing?
+  needs_reply: false
+- thread_id: e6c9a8ae-dbd9-4766-99d2-d68355e4f6b9
+  mailbox: team10@keystoneprecision.com
+  subject: NCR - Grain Cart Ladder Guard Weldment - SO-2026-00146
+  needs_reply: false
+- thread_id: 6823cafc-ed9e-4edd-87b8-2fc85c3a1b50
+  mailbox: team10@keystoneprecision.com
+  subject: New supplier portal - ASN required from Feb 1
+  needs_reply: false
+- thread_id: bfa6d97a-8a50-402e-925d-636a972b7a41
+  mailbox: orders@keystoneprecision.com
+  subject: PO AHS-400100 - order confirmation
+  needs_reply: false
+- thread_id: cb47976f-fef5-47bb-8c72-11d55e7abd36
+  mailbox: orders@keystoneprecision.com
+  subject: PO AHS-476069 - order confirmation
+  needs_reply: false
+- thread_id: 4152f4ff-d43b-45bc-9161-365006f60ad3
+  mailbox: orders@keystoneprecision.com
+  subject: PO AHS-476984 - order confirmation
+  needs_reply: false
+- thread_id: 72903090-022e-4291-b277-5e44bccad29e
+  mailbox: orders@keystoneprecision.com
+  subject: PO AHS-493253 - order confirmation
+  needs_reply: false
+- thread_id: 26712049-066e-4093-855a-a4914bbb85dc
+  mailbox: orders@keystoneprecision.com
+  subject: PO BAP-454364 - order confirmation
+  needs_reply: false
+- thread_id: 8e481ff1-3d27-4416-b4ac-89ce2f506b91
+  mailbox: orders@keystoneprecision.com
+  subject: PO CTW-402017 - order confirmation
+  needs_reply: false
+- thread_id: 0802869b-5b98-4e30-8cc1-74e17eee55db
+  mailbox: orders@keystoneprecision.com
+  subject: PO CTW-412301 - order confirmation
+  needs_reply: false
+- thread_id: 2ffb73ee-1c39-486e-ad61-81b044e48783
+  mailbox: orders@keystoneprecision.com
+  subject: PO CTW-491492 - order confirmation
+  needs_reply: false
+- thread_id: d20e2850-2170-4c7a-9746-66004bb8de2a
+  mailbox: orders@keystoneprecision.com
+  subject: PO GLI-433283 - order confirmation
+  needs_reply: false
+- thread_id: b1c7d70e-e9d9-413f-a51e-612fa17e3940
+  mailbox: orders@keystoneprecision.com
+  subject: PO GLI-440451 - order confirmation
+  needs_reply: false
+- thread_id: c73f5bac-383c-4c64-a9cf-7eeee5a3a6b4
+  mailbox: team10@keystoneprecision.com
+  subject: Q3 2025 supplier scorecard
+  needs_reply: false
+- thread_id: b6178c56-070d-455a-9536-602eade94ac1
+  mailbox: orders@keystoneprecision.com
+  subject: Quote request - Adjustable Weld Square, 12in
+  needs_reply: false
+- thread_id: 93709c82-68eb-4983-add2-b33085000edb
+  mailbox: orders@keystoneprecision.com
+  subject: Quote request - Keystone Fixture Kit — Weld Table Starter Set
+  needs_reply: false
+- thread_id: 9d874822-2cef-4589-aa75-0588ce7d2b6b
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0004 - Hydraulic Manifold Mount, machined
+  needs_reply: false
+- thread_id: 2ed1a2f5-7627-43e8-9377-f52e97380475
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0008 - Combine Header Auger Bracket Assembly
+  needs_reply: false
+- thread_id: a30c7f4d-9963-4539-8630-5465a24d0b5b
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0009 - Cab Step Frame, powder coated
+  needs_reply: false
+- thread_id: 3c53e2ca-e8ca-4e39-932a-a90922e1f436
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0010 - Laser Blank, 14 ga — mixed nest
+  needs_reply: false
+- thread_id: 5701b011-571a-4881-a99a-6985989a90a7
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0019 - Grain Cart Ladder Guard Weldment
+  needs_reply: false
+- thread_id: 90b28c20-6ea3-403a-9e90-9e3597e36a8c
+  mailbox: orders@keystoneprecision.com
+  subject: RFQ RFQ-2026-0020 - Skid-Steer Quick-Attach Plate
+  needs_reply: false
+- thread_id: b465413d-2a9b-4c8f-8e48-71af6a7ebf08
+  mailbox: orders@keystoneprecision.com
+  subject: Remittance advice - INV-2026-00045
+  needs_reply: false
+- thread_id: ee7c2313-4db0-448b-bcad-8879da4e2f2b
+  mailbox: orders@keystoneprecision.com
+  subject: Remittance advice - INV-2026-00132
+  needs_reply: false
+- thread_id: 002bf8fd-1f7d-47fd-9012-e7f4c60b76b2
+  mailbox: team10@keystoneprecision.com
+  subject: Ship date check - SO-2026-00148 / PO BAP-468573
+  needs_reply: false
+- thread_id: c1e7ee5c-03b8-4088-8ee2-c28737f1cbb0
+  mailbox: orders@keystoneprecision.com
+  subject: Short payment on INV-2026-00133
+  needs_reply: false
+- thread_id: b507e9dc-15f1-4807-b661-f16c9204ef34
+  mailbox: orders@keystoneprecision.com
+  subject: Short payment on INV-2026-00134
+  needs_reply: false
+- thread_id: 79d7508a-ee70-4d93-9de3-883a588e03ba
+  mailbox: orders@keystoneprecision.com
+  subject: Short payment on INV-2026-00135
+  needs_reply: false
+- thread_id: cc6f240c-9b07-4b84-8189-77322583ac09
+  mailbox: orders@keystoneprecision.com
+  subject: Short payment on INV-2026-00136
+  needs_reply: false
+- thread_id: 385aa7d9-86bb-4adc-ab0d-898e721a5291
+  mailbox: orders@keystoneprecision.com
+  subject: Vendor setup - W-9 and ACH form
+  needs_reply: false

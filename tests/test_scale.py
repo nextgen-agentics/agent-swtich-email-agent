@@ -28,24 +28,48 @@ CONVERSATIONS, PER_CONVERSATION, WAITING = 10_000, 5, 300
 REPLY_CHECK = "What needs my reply today?"
 
 
+def _tid(n: int) -> str:
+    """Conversation n's id. UUID-shaped, as the platform's are: since 2026-10-16 its `.get` / `.update` tools accept
+    only UUIDs. The number is the last 12 digits."""
+    return f"00000000-0000-4000-8000-{n:012d}"
+
+
 def _fill(platform):
     """Each conversation: they ask, we answer, back and forth; the last WAITING end with an unanswered question."""
     for n in range(CONVERSATIONS):
-        tid = f"t{n:05d}"
+        tid = _tid(n)
         day = f"2026-{1 + n % 9:02d}-{1 + n % 28:02d}"
-        platform.add("EmailThread", id=tid, subject=f"Order {n}", mailbox_id=SALES["id"], folder="inbox",
-                     flag_status="not_flagged", is_starred=False, importance="normal", split_category="other",
-                     updated_at=f"{day}T18:00:00")
+        platform.add(
+            "EmailThread",
+            id=tid,
+            subject=f"Order {n}",
+            mailbox_id=SALES["id"],
+            folder="inbox",
+            flag_status="not_flagged",
+            is_starred=False,
+            importance="normal",
+            split_category="other",
+            updated_at=f"{day}T18:00:00",
+        )
         last_them = n >= CONVERSATIONS - WAITING
         for k in range(PER_CONVERSATION):
             ours = k % 2 == 1 if not last_them else k % 2 == 1 and k < PER_CONVERSATION - 1
             if not last_them and k == PER_CONVERSATION - 1:
                 ours = True
             at = f"{day}T{9 + k:02d}:00:00"
-            platform.add("EmailMessage", id=f"m{n:05d}-{k}", thread_id=tid, mailbox_id=SALES["id"],
-                         from_email=SALES["email"] if ours else f"buyer{n}@customer.in",
-                         body_text=f"Message {k} about order {n}." + ("" if ours else " Can you confirm?"),
-                         folder="sent" if ours else "inbox", received_at=at, sent_at=at, created_at=at, updated_at=at)
+            platform.add(
+                "EmailMessage",
+                id=f"00000000-0000-4000-9{k:03d}-{n:012d}",
+                thread_id=tid,
+                mailbox_id=SALES["id"],
+                from_email=SALES["email"] if ours else f"buyer{n}@customer.in",
+                body_text=f"Message {k} about order {n}." + ("" if ours else " Can you confirm?"),
+                folder="sent" if ours else "inbox",
+                received_at=at,
+                sent_at=at,
+                created_at=at,
+                updated_at=at,
+            )
     platform.add("Mailbox", **{k: SALES[k] for k in ("id", "email", "is_default", "is_active")})
 
 
@@ -61,6 +85,7 @@ async def _measured(label: str):
             t = time.perf_counter()
             await asyncio.sleep(0.01)
             worst = max(worst, time.perf_counter() - t - 0.01)
+
     task = asyncio.create_task(probe())
     started = time.perf_counter()
     numbers: dict[str, float] = {}
@@ -69,16 +94,24 @@ async def _measured(label: str):
     finally:
         stop.set()
         await task
-        numbers.update(seconds=time.perf_counter() - started, loop_blocked=worst,
-                       peak_mb=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1 << 20 if sys.platform == "darwin"
-                                                                                     else 1 << 10))
-        print(f"\n[scale] {label}: {numbers['seconds']:.1f} s, loop blocked at most {numbers['loop_blocked']:.2f} s, "
-              f"peak {numbers['peak_mb']:.0f} MB")
+        numbers.update(
+            seconds=time.perf_counter() - started,
+            loop_blocked=worst,
+            peak_mb=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            / (1 << 20 if sys.platform == "darwin" else 1 << 10),
+        )
+        print(
+            f"\n[scale] {label}: {numbers['seconds']:.1f} s, loop blocked at most {numbers['loop_blocked']:.2f} s, "
+            f"peak {numbers['peak_mb']:.0f} MB"
+        )
 
 
 def _triage(**kw):
-    return ScriptedModel(goals=[goal("Find the conversations that need our reply today", "triage-replies")],
-                         verdict=lambda t: {"needs_reply": True, "why": "they ask us to confirm"}, **kw)
+    return ScriptedModel(
+        goals=[goal("Find the conversations that need our reply today", "triage-replies")],
+        verdict=lambda t: {"needs_reply": True, "why": "they ask us to confirm"},
+        **kw,
+    )
 
 
 async def test_a_large_mailbox_is_copied_once_and_then_kept_up_to_date_with_one_page_per_table(settings, platform):
@@ -110,7 +143,7 @@ async def test_triage_of_a_large_mailbox_flags_exactly_the_conversations_waiting
 
     assert final(out.run_dir).stopped == "done"
     flagged = [t for t, row in platform.rows["EmailThread"].items() if row["flag_status"] == "flagged"]
-    assert len(flagged) == WAITING and all(int(t[1:]) >= CONVERSATIONS - WAITING for t in flagged)
+    assert len(flagged) == WAITING and all(int(t[-12:]) >= CONVERSATIONS - WAITING for t in flagged)
     assert len(model.calls("judge")) == WAITING // 20
     spent = budget_spent(out.run_dir)
     assert spent["nodes"] <= settings.max_nodes and spent["llm_calls"] <= settings.max_llm_calls
@@ -119,8 +152,10 @@ async def test_triage_of_a_large_mailbox_flags_exactly_the_conversations_waiting
 
 async def test_sorting_the_whole_large_mailbox_judges_what_the_budget_allows_and_says_what_it_left(settings, platform):
     _fill(platform)
-    model = ScriptedModel(goals=[goal("Sort my inbox", "sort-inbox")],
-                          verdict=lambda t: {"importance": "high", "split_category": "important", "why": "a customer"})
+    model = ScriptedModel(
+        goals=[goal("Sort my inbox", "sort-inbox")],
+        verdict=lambda t: {"importance": "high", "split_category": "important", "why": "a customer"},
+    )
 
     async with _measured("sort-inbox over 10,000 conversations"):
         out = await agent.run("Sort my inbox", "suryodaya", settings, today=TODAY, llm=model, dry_run=True)
@@ -141,15 +176,25 @@ async def test_the_watcher_on_a_large_mailbox_raises_one_event_for_one_new_mail(
     async def run(*args, **kwargs):
         runs.append(kwargs)
         return await agent.run(*args, llm=_triage(), today=TODAY, **kwargs)
+
     w = Watcher(settings, "suryodaya", run=run, subscriptions=[sub])
     async with _measured("watcher first poll (copies the mailbox)"):
         await w.poll()
-    platform.add("EmailMessage", thread_id="t00000", mailbox_id=SALES["id"], from_email="buyer0@customer.in",
-                 body_text="One more question.", folder="inbox", received_at=now(), created_at=now(), updated_at=now())
+    platform.add(
+        "EmailMessage",
+        thread_id=_tid(0),
+        mailbox_id=SALES["id"],
+        from_email="buyer0@customer.in",
+        body_text="One more question.",
+        folder="inbox",
+        received_at=now(),
+        created_at=now(),
+        updated_at=now(),
+    )
 
     async with _measured("watcher poll with one new mail"):
         report = await w.poll()
     w.close()
 
     assert report.events == 1 and len(report.runs) == 1
-    assert runs[0]["threads"] == ["t00000"]
+    assert runs[0]["threads"] == [_tid(0)]

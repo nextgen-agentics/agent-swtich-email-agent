@@ -19,12 +19,10 @@ from email_agent.config import PROJECT_ROOT
 from email_agent.contracts.agent import FinalAnswer, RunContext, RunOutcome, WriteRecord
 from eval_harness.contracts import (
     CheckResult,
-    FollowUpAnswerKey,
-    GroundTruth,
+    NeedsReplyKey,
     PredicateName,
-    PriceAnswerKey,
+    PriceKey,
     SavedRun,
-    SortAnswerKey,
     Task,
     ThreadFlag,
     VerdictStatus,
@@ -128,11 +126,11 @@ def _flagged_by(flag: ThreadFlag | None, today: str) -> bool:
 
 def needs_reply_flagged(saved: SavedRun, snap: DbSnapshot, params: dict[str, Any]) -> CheckResult:
     name: PredicateName = "needs_reply_flagged"
-    gt = _load_key(GROUND_TRUTH / f"{saved.task.instance}.yaml", GroundTruth)
+    key = _load_key(GROUND_TRUTH / "needs-reply" / f"{saved.task.instance}.yaml", NeedsReplyKey)
     _completed(saved)
     scope = _scope(saved)
-    _covers(gt.our_mailboxes, scope, "needs-reply")
-    in_scope = [c for c in gt.needs_reply if gt.mailbox_of(c) in scope]
+    _covers(key.our_mailboxes, scope, "needs-reply")
+    in_scope = [c for c in key.items if c.mailbox in scope]
     undecided = [c.thread_id for c in in_scope if c.needs_reply is None]
     if undecided:
         raise Unevaluated(f"{len(undecided)} ground-truth items still undecided (needs_reply: null)")
@@ -169,11 +167,11 @@ def _price_line(content: str) -> dict[str, str]:
 
 def price_agreements_recorded(saved: SavedRun, snap: DbSnapshot, params: dict[str, Any]) -> CheckResult:
     name: PredicateName = "price_agreements_recorded"
-    key = _load_key(GROUND_TRUTH / "price" / f"{saved.task.instance}.yaml", PriceAnswerKey)
+    key = _load_key(GROUND_TRUTH / "price" / f"{saved.task.instance}.yaml", PriceKey)
     _completed(saved)
     scope = _scope(saved)
     _covers(key.our_mailboxes, scope, "price")
-    in_scope = [c for c in key.candidates if c.mailbox in scope]
+    in_scope = [c for c in key.items if c.mailbox in scope]
     undecided = [c.thread_id for c in in_scope if c.agreed is None]
     if undecided:
         raise Unevaluated(f"{len(undecided)} price answer-key items still undecided (agreed: null)")
@@ -202,13 +200,15 @@ def price_agreements_recorded(saved: SavedRun, snap: DbSnapshot, params: dict[st
                 wrong.append(f"{thread_id} {field}={got.get(field)} (key {want})")
         if c.reference and got.get("ref") != c.reference:
             wrong.append(f"{thread_id} ref={got.get('ref')} (key {c.reference})")
+        if c.message_id and got.get("message") != c.message_id:     # the mail where they agreed: the one to find
+            wrong.append(f"{thread_id} message={got.get('message')} (key {c.message_id})")
     unstarred = sorted(t for t in expected if not ((th := snap.thread(t)) and th.is_starred))
     if missing or extra or wrong or unstarred:
         return _result(name, "revise", f"{len(missing)} agreement(s) not recorded, {len(extra)} recorded that are "
-                       f"not agreements, {len(wrong)} wrong figure(s), {len(unstarred)} not starred",
+                       f"not agreements, {len(wrong)} wrong figure(s) or message(s), {len(unstarred)} not starred",
                        missing=missing, extra=extra, wrong=wrong, not_starred=unstarred)
     return _result(name, "approve", f"all {len(expected)} agreed prices are recorded in agent memory with the right "
-                   "figures, and their conversations are starred; nothing else was recorded",
+                   "message and figures, and their conversations are starred; nothing else was recorded",
                    recorded=sorted(rows))
 
 
@@ -243,34 +243,6 @@ def summaries_written(saved: SavedRun, snap: DbSnapshot, params: dict[str, Any])
                    written_by_run=sorted(_ids(by_run)))
 
 
-# ── followups_created ────────────────────────────────────────────────────────
-
-def followups_created(saved: SavedRun, snap: DbSnapshot, params: dict[str, Any]) -> CheckResult:
-    name: PredicateName = "followups_created"
-    key = _load_key(GROUND_TRUTH / "follow-ups" / f"{saved.task.instance}.yaml", FollowUpAnswerKey)
-    _completed(saved)
-    scope = _scope(saved)
-    _covers(key.our_mailboxes, scope, "follow-ups")
-    in_scope = [c for c in key.candidates if c.mailbox in scope]
-    undecided = [c.thread_id for c in in_scope if c.needs_follow_up is None]
-    if undecided:
-        raise Unevaluated(f"{len(undecided)} follow-up answer-key items still undecided (needs_follow_up: null)")
-    writes = _live(saved)
-    today = saved.today.isoformat()
-    expected = {c.thread_id for c in in_scope if c.needs_follow_up}
-    ours = [r for r in snap.reminders if r.created_by == saved.me_id and r.type == "follow_up" and not r.is_fired]
-    covered = {r.thread_id for r in ours if r.thread_id and (r.remind_at or "")[:10] > today}
-    created = _ids(_by_run(writes, "EmailReminder.create"))
-    created_threads = {r.thread_id for r in snap.reminders if r.id in created and r.thread_id}
-    missing = sorted(expected - covered)
-    extra = sorted(created_threads - expected)
-    if missing or extra:
-        return _result(name, "revise", f"{len(missing)} conversation(s) waiting on them have no follow-up reminder "
-                       f"after today; {len(extra)} reminder(s) created where none belongs", missing=missing, extra=extra)
-    return _result(name, "approve", f"all {len(expected)} conversations waiting on them have a follow-up reminder "
-                   f"after {today}; none was created elsewhere", created_by_run=sorted(created_threads))
-
-
 # ── memory_recorded ──────────────────────────────────────────────────────────
 
 def memory_recorded(saved: SavedRun, snap: DbSnapshot, params: dict[str, Any]) -> CheckResult:
@@ -295,39 +267,6 @@ def memory_recorded(saved: SavedRun, snap: DbSnapshot, params: dict[str, Any]) -
                        found=[f"{m.id} {m.category}: {(m.content or '')[:80]}" for m in found])
     return _result(name, "approve", f"memory saved for {params.get('party')!r} ({right[0].category}) "
                    f"containing {words}", rows=[m.id for m in right])
-
-
-# ── inbox_sorted ─────────────────────────────────────────────────────────────
-
-SORT_FIELDS = {"importance", "split_category"}
-
-
-def inbox_sorted(saved: SavedRun, snap: DbSnapshot, params: dict[str, Any]) -> CheckResult:
-    name: PredicateName = "inbox_sorted"
-    key = _load_key(GROUND_TRUTH / "sort" / f"{saved.task.instance}.yaml", SortAnswerKey)
-    _completed(saved)
-    scope = _scope(saved)
-    _covers(key.our_mailboxes, scope, "sort")
-    in_scope = [c for c in key.candidates if c.mailbox in scope]
-    undecided = [c.thread_id for c in in_scope if c.importance is None or c.split_category is None]
-    if undecided:
-        raise Unevaluated(f"{len(undecided)} sort answer-key items still undecided (importance or split_category null)")
-    writes = _live(saved)
-    other_fields = sorted({f"{w.row_id}: {k}" for w in _by_run(writes, "EmailThread.update") for k in w.fields
-                           if k not in SORT_FIELDS})
-    wrong = []
-    for c in in_scope:
-        t = snap.thread(c.thread_id)
-        if t is None:
-            continue
-        for field, want in (("importance", c.importance), ("split_category", c.split_category)):
-            if want != "any" and getattr(t, field) != want:
-                wrong.append(f"{c.thread_id} {field}={getattr(t, field)} (key {want})")
-    if wrong or other_fields:
-        return _result(name, "revise", f"{len(wrong)} value(s) differ from the answer key; {len(other_fields)} other "
-                       "field(s) written", wrong=wrong, other_fields=other_fields)
-    return _result(name, "approve", f"all {len(in_scope)} conversations have the importance and category in the "
-                   "answer key; no other field was written")
 
 
 # ── refused_without_writes ───────────────────────────────────────────────────
@@ -371,9 +310,7 @@ PREDICATES: dict[str, Callable[[SavedRun, DbSnapshot, dict[str, Any]], CheckResu
     "needs_reply_flagged": needs_reply_flagged,
     "price_agreements_recorded": price_agreements_recorded,
     "summaries_written": summaries_written,
-    "followups_created": followups_created,
     "memory_recorded": memory_recorded,
-    "inbox_sorted": inbox_sorted,
     "refused_without_writes": refused_without_writes,
 }
 # ── is a task's answer key ready? (Revision 19: the official run runs only tasks it can score) ─────────────────
@@ -382,29 +319,22 @@ def answer_key_gap(task: Task) -> str | None:
     """Why `task` cannot be scored yet — an answer key it needs is missing, or has undecided items in the mailboxes the
     task works in (its `mailboxes:`, else every mailbox the key covers) — or None when it can. Read before any run; the
     checks still decide from the run's own mailboxes afterwards."""
-    keys: dict[str, tuple[str, Callable[[Any], bool], str]] = {
-        "needs_reply_flagged": (f"{task.instance}.yaml", lambda c: c.needs_reply is None, "needs-reply"),
-        "price_agreements_recorded": (f"price/{task.instance}.yaml", lambda c: c.agreed is None, "price"),
-        "followups_created": (f"follow-ups/{task.instance}.yaml", lambda c: c.needs_follow_up is None, "follow-ups"),
-        "inbox_sorted": (f"sort/{task.instance}.yaml",
-                         lambda c: c.importance is None or c.split_category is None, "sort"),
-    }
-    models: dict[str, type[BaseModel]] = {"needs_reply_flagged": GroundTruth, "price_agreements_recorded": PriceAnswerKey,
-                                          "followups_created": FollowUpAnswerKey, "inbox_sorted": SortAnswerKey}
     for spec in task.predicates:
-        if spec.name not in keys:
-            continue                                   # summaries, memory and refusals need no answer key
-        name, undecided_item, label = keys[spec.name]
         try:
-            key: Any = _load_key(GROUND_TRUTH / name, models[spec.name])
+            if spec.name == "needs_reply_flagged":
+                reply = _load_key(GROUND_TRUTH / "needs-reply" / f"{task.instance}.yaml", NeedsReplyKey)
+                label, scope = "needs-reply", set(task.mailboxes or reply.our_mailboxes)
+                decided = [c.needs_reply for c in reply.items if c.mailbox in scope]
+            elif spec.name == "price_agreements_recorded":
+                price = _load_key(GROUND_TRUTH / "price" / f"{task.instance}.yaml", PriceKey)
+                label, scope = "price", set(task.mailboxes or price.our_mailboxes)
+                decided = [c.agreed for c in price.items if c.mailbox in scope]
+            else:
+                continue                               # summaries, memory and refusals need no answer key
         except Unevaluated as e:
             return str(e)
-        scope = set(task.mailboxes or key.our_mailboxes)
-        items = key.needs_reply if isinstance(key, GroundTruth) else key.candidates
-        mailbox_of = key.mailbox_of if isinstance(key, GroundTruth) else (lambda c: c.mailbox)
-        undecided = [c for c in items if mailbox_of(c) in scope and undecided_item(c)]
-        if undecided:
-            return f"the {label} answer key has {len(undecided)} undecided item(s) in {', '.join(sorted(scope))}"
+        if None in decided:
+            return f"the {label} answer key has {decided.count(None)} undecided item(s) in {', '.join(sorted(scope))}"
     return None
 
 

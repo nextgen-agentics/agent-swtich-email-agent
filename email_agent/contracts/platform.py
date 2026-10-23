@@ -249,7 +249,6 @@ def list_page(row: type[RowT]) -> type[ListPage[RowT]]:
 ROW_MODELS: dict[str, type[Row]] = {
     "Mailbox": Mailbox, "EmailThread": EmailThread, "EmailMessage": EmailMessage, "Party": Party, "Deal": Deal,
     "AgentMemory": AgentMemory, "AgentTodo": AgentTodo, "EmailReminder": EmailReminder, "EmailLabel": EmailLabel,
-    "AgentToolPolicy": AgentToolPolicy,
 }
 
 

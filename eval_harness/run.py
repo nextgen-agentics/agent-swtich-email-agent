@@ -47,7 +47,7 @@ async def run_task(task: Task, settings: Settings, batch: Path, *, dry_run: bool
                    view: ConsoleView | None = None, time_limit_s: float | None = None) -> SavedRun:
     """Run one task and save it as <batch>/<task-id>.json, whatever happens. `time_limit_s`: stop the agent run after
     this long (the official run's time guard); it is then saved as interrupted. `llm`: a given model (tests)."""
-    today = task.as_of or date.today()
+    today = date.today()
     saved = SavedRun(task=task, today=today, provider=settings.provider,
                      model=llm.model if llm else next((m for _, m, _ in plan_route(settings)), None),
                      route=f"{llm.model} (given)" if llm else route_text(settings), dry_run=dry_run)

@@ -28,11 +28,13 @@ tools:
 2. A conversation **needs my reply** when all of these hold:
    - the newest real message is from them and we have not replied after it;
    - it asks something of us: a question, a request, a decision, an approval, a quote, a deadline, a complaint,
-     a payment chase, or a problem to fix.
+     a payment chase, a problem to fix, or a proposed date, time or slot that we must accept, confirm or move
+     (a meeting, a visit, a delivery or an appointment: "can you confirm Thursday at 10 for the meeting?").
 3. It does **not** need my reply when:
-   - it only informs or thanks us ("payment settled", "batch released", "thanks — confirmed");
+   - it only informs or thanks us: a status update, a receipt, a thank-you that asks nothing;
    - it is a recommendation, offer or suggestion that asks nothing of us: no question, no decision or approval
-     requested, no deadline ("recommending a grade change for the EN19 shafts");
+     requested, no deadline ("we suggest switching to the newer model next time"); but a proposed date or slot
+     waiting for our yes is rule 2;
    - we wrote last and are waiting on them;
    - there is no real message from anyone else (only our own sends).
 4. If the text is not enough to decide, the answer is no. Do not guess.

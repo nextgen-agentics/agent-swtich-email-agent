@@ -19,8 +19,11 @@ REPLY_CHECK = "What needs my reply today?"
 
 
 def _triage(**kw):
-    return ScriptedModel(goals=[goal("Find the conversations that need our reply today", "triage-replies")],
-                         verdict=lambda t: {"needs_reply": True, "why": "they ask us something"}, **kw)
+    return ScriptedModel(
+        goals=[goal("Find the conversations that need our reply today", "triage-replies")],
+        verdict=lambda t: {"needs_reply": True, "why": "they ask us something"},
+        **kw,
+    )
 
 
 async def _dies(run):
@@ -69,9 +72,9 @@ async def test_a_crash_before_the_write_was_sent_sends_it_exactly_once_on_resume
 
 
 async def test_a_crash_while_judging_reuses_saved_replies_and_keeps_the_budget(settings, platform, mail, monkeypatch):
-    for n in range(45):                                  # 3 shards of at most 20
+    for n in range(45):  # 3 shards of at most 20
         mail.conversation(f"Order {n}", them(f"Please confirm order {n}.", f"2026-10-04T09:{n:02d}:00"))
-    monkeypatch.setenv("EMAIL_AGENT_CRASH_AT", "llm_call_finished:3")      # goals, planner, then the first shard
+    monkeypatch.setenv("EMAIL_AGENT_CRASH_AT", "llm_call_finished:3")  # goals, planner, then the first shard
     model = _triage()
 
     await _dies(agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model))
@@ -112,7 +115,7 @@ async def test_a_write_that_keeps_timing_out_waits_and_finishes_on_resume(settin
     assert "--resume" in (stopped.reason or "")
     assert platform.row("EmailThread", asks)["flag_status"] == "not_flagged"
 
-    del platform.no_answer["EmailThread.update"]                 # the platform answers again
+    del platform.no_answer["EmailThread.update"]  # the platform answers again
     out = await agent.resume(out.run_dir, settings, llm=_triage())
 
     assert final(out.run_dir).stopped == "done"
@@ -126,8 +129,9 @@ async def test_ctrl_c_mid_run_leaves_the_files_and_resume_finishes_the_run(setti
     run = asyncio.create_task(agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model))
 
     def ctrl_c(_req):
-        run.cancel()                                   # what Ctrl-C does to asyncio.run's main task
+        run.cancel()  # what Ctrl-C does to asyncio.run's main task
         return "Samples needs a reply."
+
     model.scripts["answer"] = ctrl_c
 
     with pytest.raises(asyncio.CancelledError):

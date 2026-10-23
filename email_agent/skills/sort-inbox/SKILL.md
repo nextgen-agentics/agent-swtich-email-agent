@@ -13,9 +13,8 @@ tools:
 - A mailbox that is not ours → `refuse` with `not_our_mailbox`.
 
 ## Importance
-- **high:** the other side is waiting on us **and** it involves a deadline, money (payment, price, order), a
-  quality problem or a complaint.
-- **normal:** other real business: an open request, an order or quote in progress, or us waiting on them.
+- **high:** the other side is waiting on us **and** it involves a deadline, money, a problem or a complaint.
+- **normal:** other real business: an open request, work in progress, or us waiting on them.
 - **low:** information or thanks only; notices; nothing anyone needs to do.
 
 ## Category (the inbox tab)

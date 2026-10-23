@@ -27,7 +27,6 @@ from email_agent.contracts.tool_args import TOOL_ARGS
 from email_agent.platform.action import LOCAL_TOOLS, READ_OPS
 
 GRAPH_CAPABILITIES = {"judge_threads", "answer", "refuse"}
-INTERNAL = {"judge_shard", "join_verdicts", "validate_verdicts", "apply_writes"}
 
 JUDGE_TIMEOUT_S = 900.0         # selects and fans out, but the run's first mailbox sync happens inside it (a cold
                                 # sync of a 50,000-message mailbox is about 60 calls at ~1 s each)
@@ -62,7 +61,7 @@ class Capabilities:
             else:
                 desc = getattr(seat_tools.get(name), "description", "") or ""
                 self.items[name] = Capability(name=name, kind="tool", args=TOOL_ARGS[name], description=desc[:300],
-                                              writes=not (name.startswith("tools.") or tool_operation(name) in READ_OPS))
+                                              writes=tool_operation(name) not in READ_OPS)
 
     def get(self, name: str) -> Capability | None:
         return self.items.get(name)

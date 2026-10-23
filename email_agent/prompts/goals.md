@@ -9,7 +9,7 @@ Rules:
 - Give every goal the ONE skill (by exact name) that does it. Never invent a skill name.
 - If no skill may do a goal, set skill to null, say why in no_skill_reason, and give a one-sentence explanation for the
   person:
-  - out_of_seat: it needs another app's or team's data (salaries, payroll, invoices, other people's records);
+  - out_of_seat: it needs another department's or app's records (for example HR, payroll or finance data);
   - not_our_mailbox: it is about a mailbox or address that is not in OUR MAILBOXES;
   - not_permitted: it asks for something this agent must never do — send or forward mail, delete or empty shared mail,
     change another team's data.

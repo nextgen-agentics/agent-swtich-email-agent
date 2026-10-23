@@ -38,14 +38,14 @@ class ViewHeader(BaseModel):
     budgets: list[Budget] = Field(default_factory=list)
     error: RunError | None = None
     next_step: str | None = None                # the command that continues, approves or rejects the run
-    has_graph: bool = False                     # False for runs of the old loop (no run.sqlite)
+    has_graph: bool = False                     # False when the run stopped before its journal (run.sqlite) existed
 
 
 class ViewCall(BaseModel):
     """One model call: what was asked, what came back, who answered."""
 
     n: int                                      # 1-based, in the order made
-    layer: str                                  # goals, planner, judge, critic, validator, answer
+    layer: str                                  # goals, planner, judge, critic, validator, answer, verifier
     node_id: str | None = None                  # None = the planner itself
     round: int                                  # planner round the run was in
     at: datetime
@@ -190,7 +190,6 @@ class RunView(BaseModel):
     house_rules: str | None = None
     history: list[str] = Field(default_factory=list)
     sync: SyncReport | None = None
-    older_lines: list[dict[str, Any]] = Field(default_factory=list)   # old-loop log lines no current model reads
 
 
 class BatchRow(BaseModel):

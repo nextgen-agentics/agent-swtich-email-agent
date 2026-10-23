@@ -590,15 +590,15 @@ class GraphRuntime:
         """S17's verifier: a score and a critique for the answer, kept as evidence (it never changes the answer)."""
         text = "\n\n".join([f"GOAL: {goal_text}", f"EVIDENCE:\n{json.dumps(evidence, ensure_ascii=False)[:30000]}",
                              f"ANSWER:\n{answer}"])
-        req = LlmRequest(purpose="critic", system=VERIFIER_SYSTEM, messages=[ChatMessage(role="user", text=text)],
+        req = LlmRequest(purpose="verifier", system=VERIFIER_SYSTEM, messages=[ChatMessage(role="user", text=text)],
                          response_schema=VerifierScore.model_json_schema(), temperature=0.0)
         try:
-            reply = await self.chat(req, task.id, "critic")
+            reply = await self.chat(req, task.id, "verifier")
             score = VerifierScore.model_validate_json(reply.text)
         except Exception as e:  # noqa: BLE001 — evidence only: a failed grade never fails the answer
             self.store.record_event("answer_scored", task.id, {"error": f"{type(e).__name__}: {e}"[:300]})
             return None
-        self.log.step(LlmStep(iter=self.round, layer="critic", node_id=task.id, request=req, reply=reply, valid=True,
+        self.log.step(LlmStep(iter=self.round, layer="verifier", node_id=task.id, request=req, reply=reply, valid=True,
                               error=f"verifier score {score.score}"))
         self.store.record_event("answer_scored", task.id, {"score": score.score, "issues": score.issues})
         return score

@@ -25,7 +25,7 @@ from email_agent.contracts.agent import (
 )
 from email_agent.contracts.platform import EmailMessage, EmailThread
 
-FACTS_VERSION = 1      # bump when overview / digest / price_view change: the local mailbox copy then rebuilds its facts
+FACTS_VERSION = 2      # bump when overview / digest / price_view change: the local mailbox copy then rebuilds its facts
 
 
 def content_hash(thread: EmailThread, messages: list[EmailMessage]) -> str:
@@ -115,10 +115,12 @@ def overview(thread: EmailThread, messages: list[EmailMessage], our_emails: set[
 
 DIGEST_TEXT = 300          # characters kept per message
 DIGEST_MESSAGES = 4        # newest real messages kept per conversation
-PRICE_WORDS = re.compile(r"\b(quot\w*|pric\w*|rates?|award\w*|purchase order|PO|orders?|accept\w*|agree\w*)\b|"
-                         r"\d\s*(pcs|units|nos|sets)?\s*@", re.I)
-REFERENCE = re.compile(r"\b(?:[A-Z]{2,5}-\d{4}-\d{2,6}|[A-Z]{2,5}-\d{4,})\b")   # QTN-2026-00003, RFQ-2026-0003, PO CTW-491492
-PRICE_LINE = re.compile(r"@\s*\S*\d")
+MONEY = re.compile(r"[$₹€£]\s?\d|\b(?:USD|INR|EUR|GBP|Rs\.?)\s?\d", re.I)       # an amount in any currency
+PRICE_WORDS = re.compile(r"\b(quot\w*|pric\w*|rates?|award\w*|purchase order|PO|orders?|accept\w*|agree\w*|fees?|"
+                         r"costs?|charges?|estimates?|proposals?|invoic\w*)\b|\d\s*(pcs|units|nos|sets)?\s*@|" + MONEY.pattern,
+                         re.I)
+REFERENCE = re.compile(r"\b(?:[A-Z]{2,5}-\d{4}-\d{2,6}|[A-Z]{2,5}-\d{4,})\b")   # e.g. QT-2025-0042, PO-12345
+PRICE_LINE = re.compile(r"@\s*\S*\d")                                          # "6 pcs @ $74.50 = $447.00"
 
 
 def _short(text: str, limit: int = DIGEST_TEXT) -> str:
@@ -152,7 +154,8 @@ def price_view(thread: EmailThread, messages: list[EmailMessage], our_emails: se
         return None
     text = " ".join([thread.subject or ""] + [v.text for v in real])
     ours = [v for v in real if v.direction == "us"]
-    lines = [" ".join(line.split()) for v in ours for line in v.text.splitlines() if PRICE_LINE.search(line)]
+    lines = [" ".join(line.split()) for v in ours for line in v.text.splitlines() if line.strip()]
+    lines = [x for x in lines if PRICE_LINE.search(x)] + [x for x in lines if MONEY.search(x) and not PRICE_LINE.search(x)]
     theirs = [v for v in real if v.direction == "them"]
     return PriceConversation(
         thread_id=thread.id, subject=thread.subject, counterpart=theirs[-1].sender if theirs else None,

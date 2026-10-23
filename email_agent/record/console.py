@@ -135,10 +135,10 @@ class ConsoleView:
                 self._line(step.iter, step.layer, f"⚠ reply rejected: {escape(_short(step.error or '', 160))} — "
                            "asking again", "yellow")
                 return
-            if step.layer == "critic" and step.valid:        # the evidence critic and the verifier: a quiet line
+            if step.layer in ("critic", "verifier") and step.valid:   # the evidence check and the score: a quiet line
                 if step.error:
                     style = "yellow" if step.error.startswith("not ready") else "dim"
-                    self._line(step.iter, "critic", f"{escape(step.node_id or '')}: {escape(step.error)}", style)
+                    self._line(step.iter, step.layer, f"{escape(step.node_id or '')}: {escape(step.error)}", style)
                 return
             if step.layer in ("judge", "answer", "validator"):  # the node line carries the outcome
                 if self.verbose and step.reply:

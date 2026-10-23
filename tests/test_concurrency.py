@@ -39,6 +39,7 @@ def _needs_reply(_thread_id):
 
 # ── MCP calls ────────────────────────────────────────────────────────────────
 
+
 class _Server:
     """Stands in for the MCP client inside a real McpSession. One tool can be made to hang forever."""
 
@@ -70,15 +71,19 @@ async def test_a_hung_mcp_call_times_out_alone_while_the_others_finish(settings)
     session = McpSession(settings, "suryodaya")
     session._client = _Server(hang="EmailThread.update")
 
-    hung, *rest = await asyncio.wait_for(asyncio.gather(
-        session.call("EmailThread.update", {"id": "t1"}), *(session.call("EmailThread.list", {}) for _ in range(4))),
-        timeout=2)
+    hung, *rest = await asyncio.wait_for(
+        asyncio.gather(
+            session.call("EmailThread.update", {"id": "t1"}), *(session.call("EmailThread.list", {}) for _ in range(4))
+        ),
+        timeout=2,
+    )
 
     assert not hung.ok and hung.error.kind == "timeout"
     assert all(o.ok for o in rest)
 
 
 # ── graph nodes and model calls ──────────────────────────────────────────────
+
 
 async def test_never_more_nodes_than_workers_and_a_slow_node_does_not_hold_back_the_rest(tmp_path):
     fast_done = asyncio.Event()
@@ -87,9 +92,13 @@ async def test_never_more_nodes_than_workers_and_a_slow_node_does_not_hold_back_
     class Planner:
         async def plan(self, graph, event):
             if event.kind == "run_started":
-                return GraphPatch(add=[TaskSpec(id="a_slow", capability="slow"),     # first in id order: starts first
-                                       *(TaskSpec(id=f"fast{n:02d}", capability="fast") for n in range(10))],
-                                  reason="one slow and ten fast")
+                return GraphPatch(
+                    add=[
+                        TaskSpec(id="a_slow", capability="slow"),  # first in id order: starts first
+                        *(TaskSpec(id=f"fast{n:02d}", capability="fast") for n in range(10)),
+                    ],
+                    reason="one slow and ten fast",
+                )
             done = all(n.state == "succeeded" for n in graph.nodes.values())
             return GraphPatch(finish=done, reason="all done" if done else "wait")
 
@@ -107,13 +116,14 @@ async def test_never_more_nodes_than_workers_and_a_slow_node_does_not_hold_back_
         nonlocal running, peak
         running += 1
         peak = max(peak, running)
-        await fast_done.wait()            # finishes only once every fast node has, so it holds a slot meanwhile
+        await fast_done.wait()  # finishes only once every fast node has, so it holds a slot meanwhile
         running -= 1
         return {}
 
     store = RunStore(tmp_path / "run.sqlite")
-    report = await asyncio.wait_for(GraphExecutor(store, Planner(), {"fast": fast, "slow": slow}, max_workers=3)
-                                    .run(run_id="r"), timeout=5)
+    report = await asyncio.wait_for(
+        GraphExecutor(store, Planner(), {"fast": fast, "slow": slow}, max_workers=3).run(run_id="r"), timeout=5
+    )
     store.close()
 
     assert report.finished
@@ -134,26 +144,39 @@ async def test_parallel_shards_never_have_more_model_calls_in_flight_than_allowe
 
 # ── the local SQLite files ───────────────────────────────────────────────────
 
+
 def _memories(platform, party, n):
     for k in range(n):
-        platform.add("AgentMemory", party_id=party, category="fact", is_active=True,
-                     content=f"Fact {k} about this customer.", created_at="2026-09-01T10:00:00",
-                     updated_at="2026-09-01T10:00:00")
+        platform.add(
+            "AgentMemory",
+            party_id=party,
+            category="fact",
+            is_active=True,
+            content=f"Fact {k} about this customer.",
+            created_at="2026-09-01T10:00:00",
+            updated_at="2026-09-01T10:00:00",
+        )
 
 
 def _two_parties(platform):
     acme = platform.add("Party", name="Acme Forgings", email="buyer@acme.in")["id"]
     bharat = platform.add("Party", name="Bharat Castings", email="ops@bharat.in")["id"]
-    for party in (acme, bharat):                    # enough rows that the two copies overlap in time
+    for party in (acme, bharat):  # enough rows that the two copies overlap in time
         _memories(platform, party, 1500)
     return acme, bharat
 
 
 async def test_two_memory_recalls_in_the_same_round_both_succeed(settings, platform, mail):
     acme, bharat = _two_parties(platform)
-    model = ScriptedModel(goals=[goal("What do we remember about Acme and Bharat?", "remember-about-customer")],
-                          plan=rounds([task("about_acme", "recall_memory", "g1", party_id=acme),
-                                       task("about_bharat", "recall_memory", "g1", party_id=bharat)]))
+    model = ScriptedModel(
+        goals=[goal("What do we remember about Acme and Bharat?", "remember-about-customer")],
+        plan=rounds(
+            [
+                task("about_acme", "recall_memory", "g1", party_id=acme),
+                task("about_bharat", "recall_memory", "g1", party_id=bharat),
+            ]
+        ),
+    )
 
     out = await agent.run("What do we remember about Acme and Bharat?", "suryodaya", settings, today=TODAY, llm=model)
 
@@ -164,10 +187,22 @@ async def test_two_memory_recalls_in_the_same_round_both_succeed(settings, platf
 
 async def test_remembering_one_customer_while_recalling_another_both_succeed(settings, platform, mail):
     acme, bharat = _two_parties(platform)
-    model = ScriptedModel(goals=[goal("Remember Acme's invoice format", "remember-about-customer")],
-                          plan=rounds([task("remember", "remember_fact", "g1", party_id=acme, category="preference",
-                                            content="Acme wants invoices as PDF."),
-                                       task("about_bharat", "recall_memory", "g1", party_id=bharat)]))
+    model = ScriptedModel(
+        goals=[goal("Remember Acme's invoice format", "remember-about-customer")],
+        plan=rounds(
+            [
+                task(
+                    "remember",
+                    "remember_fact",
+                    "g1",
+                    party_id=acme,
+                    category="preference",
+                    content="Acme wants invoices as PDF.",
+                ),
+                task("about_bharat", "recall_memory", "g1", party_id=bharat),
+            ]
+        ),
+    )
 
     out = await agent.run("Remember that Acme wants PDF invoices", "suryodaya", settings, today=TODAY, llm=model)
 
@@ -178,18 +213,33 @@ async def test_remembering_one_customer_while_recalling_another_both_succeed(set
 
 def _big_copy(tmp_path, n=2000):
     copy = MailboxStore(tmp_path / "mailbox.sqlite")
-    copy.upsert_threads([EmailThread(id=f"t{i}", subject=f"Order {i}", mailbox_id=SALES["id"],
-                                     updated_at="2026-10-01T00:00:00") for i in range(n)])
-    copy.upsert_messages([EmailMessage(id=f"m{i}", thread_id=f"t{i}", mailbox_id=SALES["id"], from_email="b@acme.in",
-                                       body_text="Please confirm.", received_at="2026-10-01T09:00:00",
-                                       updated_at="2026-10-01T09:00:00") for i in range(n)])
+    copy.upsert_threads(
+        [
+            EmailThread(id=f"t{i}", subject=f"Order {i}", mailbox_id=SALES["id"], updated_at="2026-10-01T00:00:00")
+            for i in range(n)
+        ]
+    )
+    copy.upsert_messages(
+        [
+            EmailMessage(
+                id=f"m{i}",
+                thread_id=f"t{i}",
+                mailbox_id=SALES["id"],
+                from_email="b@acme.in",
+                body_text="Please confirm.",
+                received_at="2026-10-01T09:00:00",
+                updated_at="2026-10-01T09:00:00",
+            )
+            for i in range(n)
+        ]
+    )
     return copy
 
 
 async def test_a_writes_local_update_while_a_sync_rebuilds_in_a_thread_does_not_collide(tmp_path):
     copy = _big_copy(tmp_path)
     rebuild = asyncio.create_task(asyncio.to_thread(copy.rebuild_facts, copy.all_thread_ids(), OURS))
-    await asyncio.sleep(0.05)                        # the rebuild is inside its transaction now
+    await asyncio.sleep(0.05)  # the rebuild is inside its transaction now
 
     updated = copy.apply_thread_update("t7", {"flag_status": "flagged"}, OURS)
     await rebuild
@@ -199,15 +249,16 @@ async def test_a_writes_local_update_while_a_sync_rebuilds_in_a_thread_does_not_
     assert updated and flag == "flagged"
 
 
-async def test_a_node_that_times_out_during_the_sync_leaves_the_sync_usable_for_the_next(settings, platform, mail, ctx,
-                                                                                        tmp_path):
+async def test_a_node_that_times_out_during_the_sync_leaves_the_sync_usable_for_the_next(
+    settings, platform, mail, ctx, tmp_path
+):
     for n in range(2000):
         mail.conversation(f"Order {n}", them(f"Please confirm order {n}.", "2026-10-01T09:00:00"))
     copy = MailboxStore(tmp_path / "mailbox.sqlite")
     action = Action(platform, ctx, None, copy, writes=None)
 
     try:
-        await asyncio.wait_for(action._ensure_synced(), timeout=0.3)    # the node's time limit, mid-rebuild
+        await asyncio.wait_for(action._ensure_synced(), timeout=0.3)  # the node's time limit, mid-rebuild
     except TimeoutError:
         pass
     await action._ensure_synced()
@@ -223,10 +274,23 @@ async def test_two_runs_at_once_on_the_same_state_folder_both_finish(settings, p
     b = mail.conversation("Invoice copy", them("Please resend the invoice.", "2026-10-04T10:00:00"))
 
     first, second = await asyncio.gather(
-        agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=ScriptedModel(goals=[TRIAGE], verdict=_needs_reply),
-                  threads=[a]),
-        agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=ScriptedModel(goals=[TRIAGE], verdict=_needs_reply),
-                  threads=[b]))
+        agent.run(
+            REPLY_CHECK,
+            "suryodaya",
+            settings,
+            today=TODAY,
+            llm=ScriptedModel(goals=[TRIAGE], verdict=_needs_reply),
+            threads=[a],
+        ),
+        agent.run(
+            REPLY_CHECK,
+            "suryodaya",
+            settings,
+            today=TODAY,
+            llm=ScriptedModel(goals=[TRIAGE], verdict=_needs_reply),
+            threads=[b],
+        ),
+    )
 
     assert final(first.run_dir).stopped == final(second.run_dir).stopped == "done"
     assert platform.row("EmailThread", a)["flag_status"] == platform.row("EmailThread", b)["flag_status"] == "flagged"
@@ -235,32 +299,48 @@ async def test_two_runs_at_once_on_the_same_state_folder_both_finish(settings, p
 async def test_two_nodes_writing_the_same_conversation_both_land(settings, platform, mail):
     asks = mail.conversation("Samples", them("Could you send two samples?", "2026-10-04T09:00:00"))
     platform.delay = 0.01
-    model = ScriptedModel(goals=[TRIAGE], plan=rounds([
-        task("flag", "EmailThread.update", "g1", id=asks, flag_status="flagged"),
-        task("star", "EmailThread.update", "g1", id=asks, is_starred=True)]))
+    model = ScriptedModel(
+        goals=[TRIAGE],
+        plan=rounds(
+            [
+                task("flag", "EmailThread.update", "g1", id=asks, flag_status="flagged"),
+                task("star", "EmailThread.update", "g1", id=asks, is_starred=True),
+            ]
+        ),
+    )
 
     out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model)
 
     row = platform.row("EmailThread", asks)
     assert row["flag_status"] == "flagged" and row["is_starred"] is True
-    assert sorted((w.fields for w in writes(out.run_dir)), key=str) == [{"flag_status": "flagged"}, {"is_starred": True}]
+    assert sorted((w.fields for w in writes(out.run_dir)), key=str) == [
+        {"flag_status": "flagged"},
+        {"is_starred": True},
+    ]
 
 
 # ── the platform's rows change while we read them ────────────────────────────
+
 
 async def test_a_row_changed_between_sync_pages_is_not_deleted_from_the_copy(platform, mail, tmp_path):
     thread = mail.conversation("Long thread", them("Opening question.", "2026-06-01T08:00:00"))
     for k in range(1499):
         mail.say(thread, us(f"Note {k}.", f"2026-06-{1 + k // 60:02d}T{8 + (k // 5) % 12:02d}:{k % 60:02d}:00"))
     copy = MailboxStore(tmp_path / "mailbox.sqlite")
-    sync = MailboxSync(platform, copy, "suryodaya", [type("Mb", (), {"id": SALES["id"], "email": SALES["email"]})()],
-                       OURS)
+    sync = MailboxSync(
+        platform, copy, "suryodaya", [type("Mb", (), {"id": SALES["id"], "email": SALES["email"]})()], OURS
+    )
     await sync.run(full=True)
     older = sorted(platform.rows["EmailMessage"].values(), key=lambda m: m["updated_at"])[100]["id"]
 
     def team11_edits_during_the_pass(name, args):
-        if name == "EmailMessage.list" and args.get("offset") == 1000 and not platform.rows["EmailMessage"][older].get("seen"):
+        if (
+            name == "EmailMessage.list"
+            and args.get("offset") == 1000
+            and not platform.rows["EmailMessage"][older].get("seen")
+        ):
             platform.rows["EmailMessage"][older].update(updated_at=now(), seen=True)
+
     platform.hooks.append(team11_edits_during_the_pass)
     await sync.run(full=True)
     kept = copy.message(older)
@@ -270,16 +350,36 @@ async def test_a_row_changed_between_sync_pages_is_not_deleted_from_the_copy(pla
 
 
 async def test_an_existing_follow_up_reminder_past_the_first_thousand_is_not_created_again(settings, platform, mail):
-    waiting = mail.conversation("Quote sent", them("Please quote 20 valves.", "2026-09-25T09:00:00"),
-                                us("Our quote is attached.", "2026-09-26T09:00:00"))
+    waiting = mail.conversation(
+        "Quote sent",
+        them("Please quote 20 valves.", "2026-09-25T09:00:00"),
+        us("Our quote is attached.", "2026-09-26T09:00:00"),
+    )
     ours = mail.messages(waiting)[-1]["id"]
-    platform.add("EmailReminder", thread_id=waiting, message_id=ours, type="follow_up", is_fired=False,
-                 remind_at="2026-10-08", created_at="2026-09-26T10:00:00", updated_at="2026-09-26T10:00:00")
-    for n in range(1000):                            # newer reminders on other conversations come first in the list
-        platform.add("EmailReminder", thread_id=f"elsewhere-{n}", message_id=f"m-{n}", type="follow_up",
-                     is_fired=False, remind_at="2026-10-09", updated_at=f"2026-10-0{1 + n % 4}T10:00:00")
-    model = ScriptedModel(goals=[goal("Remind me where I am waiting on a reply", "follow-up-reminders")],
-                          verdict=lambda t: {"waiting_on_them": True, "remind_at": None, "note": "waiting for the PO"})
+    platform.add(
+        "EmailReminder",
+        thread_id=waiting,
+        message_id=ours,
+        type="follow_up",
+        is_fired=False,
+        remind_at="2026-10-08",
+        created_at="2026-09-26T10:00:00",
+        updated_at="2026-09-26T10:00:00",
+    )
+    for n in range(1000):  # newer reminders on other conversations come first in the list
+        platform.add(
+            "EmailReminder",
+            thread_id=f"elsewhere-{n}",
+            message_id=f"m-{n}",
+            type="follow_up",
+            is_fired=False,
+            remind_at="2026-10-09",
+            updated_at=f"2026-10-0{1 + n % 4}T10:00:00",
+        )
+    model = ScriptedModel(
+        goals=[goal("Remind me where I am waiting on a reply", "follow-up-reminders")],
+        verdict=lambda t: {"waiting_on_them": True, "remind_at": None, "note": "waiting for the PO"},
+    )
 
     await agent.run("Remind me where I am waiting on a reply", "suryodaya", settings, today=TODAY, llm=model)
 
@@ -288,12 +388,19 @@ async def test_an_existing_follow_up_reminder_past_the_first_thousand_is_not_cre
 
 # ── the watcher ──────────────────────────────────────────────────────────────
 
+
 async def test_a_burst_of_events_never_spends_more_than_the_daily_model_call_ceiling(settings, platform, mail):
     model = ScriptedModel(goals=[TRIAGE], verdict=_needs_reply)
-    sub = Subscription(id="reply-check", instances=["suryodaya"], event_types=["new_inbound"],
-                       request=REPLY_CHECK, max_llm_calls_per_day=10)
-    w = Watcher(settings, "suryodaya", run=lambda *a, **kw: agent.run(*a, llm=model, today=TODAY, **kw),
-                subscriptions=[sub])
+    sub = Subscription(
+        id="reply-check",
+        instances=["suryodaya"],
+        event_types=["new_inbound"],
+        request=REPLY_CHECK,
+        max_llm_calls_per_day=10,
+    )
+    w = Watcher(
+        settings, "suryodaya", run=lambda *a, **kw: agent.run(*a, llm=model, today=TODAY, **kw), subscriptions=[sub]
+    )
     mail.conversation("Old", them("Old mail.", "2026-10-03T09:00:00"))
     await w.poll()
     for n in range(3):
@@ -322,6 +429,7 @@ async def test_a_poll_that_fails_is_reported_and_the_next_poll_works(settings, p
 
 
 # ── REST ─────────────────────────────────────────────────────────────────────
+
 
 def test_a_rest_write_after_the_token_expired_logs_in_again_and_succeeds(settings):
     settings.as_suryodaya_password = SecretStr("not-a-real-password")

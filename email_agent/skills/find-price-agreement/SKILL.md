@@ -20,21 +20,21 @@ tools:
 - Only for one named conversation whose text is cut short: `EmailMessage.list` with its `thread_id`.
 
 ## What counts as an agreed price
-- **Agreed:** the other side accepts **our** quoted price in writing. For example: "we are awarding … per your
-  quote …", "we accept your quotation …", "go ahead at your price".
+- **Agreed:** the other side accepts **our** quoted price in writing, for example "we accept your quotation" or
+  "please go ahead at the price you quoted".
   - The figures come from **our** price line in the same conversation: item, quantity, unit price, line total
     (quantity × unit price, before tax), and our quote reference. `agreement_message_id` is **their** accepting
     message's id; `agreed_on` its date (YYYY-MM-DD).
 - **Not agreed:**
-  - they chose someone else ("went with another …", "incumbent") → `lost`;
-  - it is still open ("under review", "decision expected") → `open`;
+  - they chose another supplier, or kept their current one → `lost`;
+  - they have not decided yet → `open`;
   - a request for a quote with no acceptance, or our own follow-ups → `quote_only`;
   - a purchase order that does not name our quote → `open`.
 - **When the record disagrees with the mail,** the mail decides.
   - If the item has a `deal`, compare its line `rate` with our unit price. Write "agrees" or "differs: deal
     <rate> vs quote <price>" in `record_check`.
   - A deal whose stage or notes say "agreed" when the mail shows no acceptance is **not** an agreement. Say so in
-    `why` ("the deal says agreed, the mail does not").
+    `why`.
 
 ## What is written (by code, from the verdicts)
 For each agreement: one fact in agent memory, linked to the other side's party (its first line is machine-readable:

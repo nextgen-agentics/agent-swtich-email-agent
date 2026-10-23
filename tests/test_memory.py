@@ -26,16 +26,32 @@ def _recalled(run_dir, node_id):
 
 async def test_a_fact_remembered_in_one_run_comes_back_later_for_that_customer_only(settings, platform, mail):
     acme, bharat = _parties(platform)
-    told = ScriptedModel(goals=[REMEMBER], plan=rounds(
-        [task("recall", "recall_memory", "g1", party_id=acme)],
-        [task("remember", "remember_fact", "g1", party_id=acme, category="preference",
-              content="Acme wants every invoice as a PDF, never as a spreadsheet.")]))
+    told = ScriptedModel(
+        goals=[REMEMBER],
+        plan=rounds(
+            [task("recall", "recall_memory", "g1", party_id=acme)],
+            [
+                task(
+                    "remember",
+                    "remember_fact",
+                    "g1",
+                    party_id=acme,
+                    category="preference",
+                    content="Acme wants every invoice as a PDF, never as a spreadsheet.",
+                )
+            ],
+        ),
+    )
     await agent.run("Remember that Acme wants invoices as PDF", "suryodaya", settings, today=TODAY, llm=told)
     assert [m["party_id"] for m in platform.rows["AgentMemory"].values()] == [acme]
 
-    later = ScriptedModel(goals=[goal("Say what we remember about Acme and Bharat", "remember-about-customer")],
-                          plan=rounds([task("about_acme", "recall_memory", "g1", party_id=acme)],
-                                      [task("about_bharat", "recall_memory", "g1", party_id=bharat)]))
+    later = ScriptedModel(
+        goals=[goal("Say what we remember about Acme and Bharat", "remember-about-customer")],
+        plan=rounds(
+            [task("about_acme", "recall_memory", "g1", party_id=acme)],
+            [task("about_bharat", "recall_memory", "g1", party_id=bharat)],
+        ),
+    )
     out = await agent.run("What do we remember about Acme and Bharat?", "suryodaya", settings, today=TODAY, llm=later)
 
     assert "invoice as a PDF" in _recalled(out.run_dir, "about_acme")
@@ -44,31 +60,51 @@ async def test_a_fact_remembered_in_one_run_comes_back_later_for_that_customer_o
 
 async def test_a_memory_switched_off_on_the_platform_is_no_longer_recalled(settings, platform, mail):
     acme, _ = _parties(platform)
-    memory = platform.add("AgentMemory", party_id=acme, category="instruction", is_active=True,
-                          content="Always copy accounts@acme.in on invoices.", created_at="2026-09-20T10:00:00",
-                          updated_at="2026-09-20T10:00:00")
+    memory = platform.add(
+        "AgentMemory",
+        party_id=acme,
+        category="instruction",
+        is_active=True,
+        content="Always copy accounts@acme.in on invoices.",
+        created_at="2026-09-20T10:00:00",
+        updated_at="2026-09-20T10:00:00",
+    )
 
     def recall_acme():
         return ScriptedModel(goals=[REMEMBER], plan=rounds([task("recall", "recall_memory", "g1", party_id=acme)]))
+
     first = await agent.run("What do we remember about Acme?", "suryodaya", settings, today=TODAY, llm=recall_acme())
     assert "accounts@acme.in" in _recalled(first.run_dir, "recall")
 
-    memory.update(is_active=False, updated_at="2026-10-04T10:00:00")              # someone switched it off
+    memory.update(is_active=False, updated_at="2026-10-04T10:00:00")  # someone switched it off
     second = await agent.run("What do we remember about Acme?", "suryodaya", settings, today=TODAY, llm=recall_acme())
 
     assert "accounts@acme.in" not in _recalled(second.run_dir, "recall")
 
 
-async def test_the_planner_sees_earlier_runs_on_this_mailbox_but_not_other_mailboxes_or_this_run(settings, platform, mail):
+async def test_the_planner_sees_earlier_runs_on_this_mailbox_but_not_other_mailboxes_or_this_run(
+    settings, platform, mail
+):
     mail.conversation("Samples", them("Could you send two samples?", "2026-10-04T09:00:00"))
     triage = goal("Find the conversations that need our reply today", "triage-replies")
-    await agent.run("Which mail needs a reply?", "suryodaya", settings, today=TODAY, llm=ScriptedModel(goals=[triage]),
-                    dry_run=True)
+    await agent.run(
+        "Which mail needs a reply?", "suryodaya", settings, today=TODAY, llm=ScriptedModel(goals=[triage]), dry_run=True
+    )
     store = LongTermMemory.for_instance(settings.state_dir, "suryodaya")
     try:
-        store.save_episode(Episode(run_id="elsewhere-1", day="2026-10-04", request="Sort the orders inbox",
-                                   stopped="done", dry_run=False, goals=[],
-                                   mailboxes=["orders@elsewhere.in"]), ["mb-elsewhere"], "someone")
+        store.save_episode(
+            Episode(
+                run_id="elsewhere-1",
+                day="2026-10-04",
+                request="Sort the orders inbox",
+                stopped="done",
+                dry_run=False,
+                goals=[],
+                mailboxes=["orders@elsewhere.in"],
+            ),
+            ["mb-elsewhere"],
+            "someone",
+        )
     finally:
         store.close()
     model = ScriptedModel(goals=[triage])

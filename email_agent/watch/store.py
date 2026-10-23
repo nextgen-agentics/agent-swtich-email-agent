@@ -84,10 +84,6 @@ class EventStore:
                                 "GROUP BY control", (_iso(since),)).fetchall()
         return {r["control"]: r["n"] for r in rows}
 
-    def event(self, key: str) -> MailboxEvent | None:
-        row = self.con.execute("SELECT event FROM events WHERE key = ?", (key,)).fetchone()
-        return MailboxEvent.model_validate_json(row["event"]) if row else None
-
     # ── windows (S17 window_reserve / window_record) ─────────────────────────
     def window(self, day: str, subscription_id: str, kind: str) -> int:
         row = self.con.execute("SELECT count FROM windows WHERE day = ? AND subscription_id = ? AND kind = ?",

@@ -29,7 +29,7 @@ def _now() -> datetime:
 class LlmStep(BaseModel):
     kind: Literal["llm"] = "llm"
     iter: int
-    layer: Literal["goals", "planner", "judge", "answer", "critic", "validator"]
+    layer: Literal["goals", "planner", "judge", "answer", "critic", "validator", "verifier"]
     node_id: str | None = None          # the graph node that made the call (Revision 12)
     request: LlmRequest
     reply: LlmReply | None = None

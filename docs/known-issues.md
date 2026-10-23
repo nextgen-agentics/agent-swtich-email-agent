@@ -13,11 +13,12 @@
 | P5 | The server answers our MCP calls **one at a time**, about 1 second each whatever their size | live measurement (Stage 0) | read in big pages (1,000 rows), keep a local copy of the mailbox, at most 2 calls at once | `email_agent/mailbox/sync.py`, `email_agent/config.py` (`mcp_concurrency`) | no (a fact to design for; C5) |
 | P6 | A conversation's `updated_at` can be a few milliseconds **older** than its newest message | mailbox-copy check (Stage 2) | messages are synced on their own, not only through their conversation | `email_agent/mailbox/sync.py` | no (C6) |
 | P7 | The **"who changed it" fields cannot tell the agent from a person**: the agent and the person share one login, and on Keystone even the inbound customer mail was created under it | inbox watcher (Stage 8) | the watcher keeps its own record of every write the agent sent and every undo step; a change within 5 minutes of one of them counts as ours | `email_agent/watch/store.py` (`our_writes`), `email_agent/watch/governor.py` | no (a shared-login fact) |
-| P8 | Text fields arrive in three shapes; booleans as `0/1`, counts as decimals, times without a zone (older finding, still handled) | Revisions 2–4 | the row contracts accept every shape and turn it into one | `email_agent/contracts/platform.py` (`WORKAROUND(BUG-001)`, `WORKAROUND(BUG-008)`) | filed (BUG-001, BUG-008) |
-| P9 | A conversation's summary and counter fields are not kept up to date (older finding) | Revision 4 | facts are always worked out from the messages, never from those fields | `email_agent/mailbox/conversation.py` (BUG-005) | filed (BUG-005) |
-| P10 | The pre-loaded Suryodaya mail has "mirror copies": a message repeated word for word as if we had replied (older finding) | Revision 4 | such copies do not count as replies | `email_agent/mailbox/conversation.py` (`WORKAROUND(BUG-022)`) | filed (BUG-022) |
-| P11 | Searching agent memory by its text never matches (older finding) | Revision 3 | memory is searched in our own local copy (full text, and by meaning in hybrid mode); price memories carry a machine-readable first line so checks find them by run | `email_agent/memory/store.py`, `email_agent/graph/flows.py` | filed (BUG-014) |
-| P12 | Some list results include rows from mailboxes that are not ours (older finding) | Revision 5 | those rows are left out before the model sees them | `email_agent/platform/action.py` | filed (BUG-019, BUG-026) |
+| P8 | Text fields arrive in three shapes; booleans as `0/1`, counts as decimals, times without a zone (older finding, still handled) | Revisions 2–4 | the row contracts accept every shape and turn it into one | `email_agent/contracts/platform.py` (`WORKAROUND(BUG-001)`, `WORKAROUND(BUG-008)`) | filed (BUG-001, BUG-008); board: fixed (live); existing rows still mixed (2026-10-16); since 2026-10-16 the schema declares `labels` a list of ids |
+| P9 | A conversation's summary and counter fields are not kept up to date (older finding) | Revision 4 | facts are always worked out from the messages, never from those fields | `email_agent/mailbox/conversation.py` (BUG-005) | filed (BUG-005); board: fixed (live); 16 of 21 Suryodaya threads still name the wrong last sender (2026-10-16) |
+| P10 | The pre-loaded Suryodaya mail has "mirror copies": a message repeated word for word as if we had replied (older finding) | Revision 4 | such copies do not count as replies | `email_agent/mailbox/conversation.py` (`WORKAROUND(BUG-022)`) | filed (BUG-022); board: fixed (live); the 16 copies are still there (2026-10-16) |
+| P11 | Searching agent memory by its text never matches (older finding) | Revision 3 | memory is searched in our own local copy (full text, and by meaning in hybrid mode); price memories carry a machine-readable first line so checks find them by run | `email_agent/memory/store.py`, `email_agent/graph/flows.py` | filed (BUG-014); board: fixed (live); not re-tested (a write check) |
+| P12 | Some list results include rows from mailboxes that are not ours (older finding) | Revision 5 | those rows are left out before the model sees them | `email_agent/platform/action.py` | filed (BUG-019, BUG-026); board: fixed (live); BUG-019 confirmed fixed, BUG-026 still shows 4 Suryodaya reminders on conversations we cannot open (2026-10-16) |
+| P13 | **Since Release 13 (seen 2026-10-23)**, list tools return values their own output schema forbids (`EmailThread.list` `participant_names`, `EmailMessage.list` `to`, 4 more); the official MCP SDK refuses the whole reply, so the agent could not list mail at all | Revision 23 refresh (`explore.py` failed) and a live dry run | a reply that breaks the tool's own schema is logged once per tool, not refused; our row contracts read it | `email_agent/platform/mcp_session.py` (`WORKAROUND(BUG-031)`) | draft ready (C7), file now |
 
 ### The model providers (Gemini, W&B)
 
@@ -29,7 +30,8 @@
 | M4 | Gemini **refuses an empty text** (400), which made it refuse a whole batch | empty messages get no vector; a 400 is reported at once with its own message, not hidden behind another key's error | `email_agent/mailbox/search.py` |
 | M5 | `gemini-embedding-2` turns a **list of texts into one vector** (it merges them) | we use `gemini-embedding-001`, which gives one vector per text | `email_agent/config.py` (`embed_model`) |
 | M6 | The Gemini SDK switches on "automatic function calling" by default and **warns on every call** | it is switched off explicitly (we offer no tools) | `email_agent/llm/route.py` (`GeminiClient._config`) |
-| M7 | Opening and closing an MCP session had **no overall time limit**: a slow server stalled a harness batch for 8+ minutes between two tasks | opening is limited to 60 s (the token check runs in a thread, so the limit can fire), closing to 20 s, `list_tools` to 90 s | `email_agent/platform/mcp_session.py` |
+| M7 | Opening and closing an MCP session had **no overall time limit**: a slow server stalled a test-suite batch for 8+ minutes between two tasks | opening is limited to 60 s (the token check runs in a thread, so the limit can fire), closing to 20 s, `list_tools` to 90 s | `email_agent/platform/mcp_session.py` |
+| M8 | The AgentSwitch runner's model answers **429 `budget_exhausted`** once the run's token budget is spent (instructor's harness rules, Oct 2026); we read every 429 as a rate limit and waited up to 2 minutes per call | that 429 kills every option on that key at once ("token budget spent"); the official run writes the remaining tasks as not run | `email_agent/llm/route.py` (`BUDGET_SPENT_CODE`), `eval_harness/official.py` |
 
 ## 2. Our own bugs, found and fixed
 
@@ -75,23 +77,32 @@ Every row was found by a run, a drill or a check, fixed, and checked again.
 
 | What | Why it is open | Where it is tracked |
 |---|---|---|
-| Price verdicts on the Keystone "PO … order confirmation" conversations change between runs ("not a price" vs "agreed") | the validator holds the disputed ones (9 of 15), but which is right needs your price answer key | open |
+| Price verdicts on the Keystone "PO … order confirmation" conversations change between runs ("not a price" vs "agreed") | the second opinion holds the disputed ones (9 of 15); the price answer key decides which is right | open |
 | A replayed planner round after a resume charges the planner-round budget once more | the reply itself is reused for free; the round counter is not | open |
-| Hybrid search can still add one off-topic conversation, and the planner searches with a single word | hybrid search is off by default until your confirmed queries say otherwise | open |
-| The follow-ups answer says "not reported" for the conversations that are not waiting on anyone | wording only | open |
+| Hybrid search can still add one off-topic conversation, and the planner searches with a single word | hybrid search is off by default until its test questions are confirmed | open |
 | The first meaning-based (hybrid) embedding of a 50,000-message mailbox takes about 9 hours at 90 texts a minute, and a node time limit throws its progress away | hybrid search is off by default; the fix (save each batch, embed in the background) waits until hybrid becomes the default | open |
 | The MCP session keeps the token it opened with; a session that outlives the token fails its calls | REST logs in again on 401 (fixed); for MCP the token lifetime has not been measured live | open |
 | Two inbound messages on one conversation in one watcher poll start two runs on the same conversation | each run has its own row locks; today's subscription is a dry run | open |
 | The executor starts no new node while the planner is thinking | throughput only; nothing is lost | open |
-| Our live checks (live harness, live drill, live watcher check) | they write to the shared books, so they are yours to run | open |
+| On an official run the second opinion (validator) is skipped | the AgentSwitch runner gives one model, and the check needs two; the run records "no second model configured", and the code checks still apply | by design |
+| A price agreement must be quantity × unit price; a lump-sum fee cannot be recorded | the figures check needs both numbers | open |
+| Code picks the price candidates with word and amount rules (quote, price, order, fee, invoice, any money amount); price mail that uses none of them is not reviewed | a model call per conversation would cost too much on a large mailbox | open |
 
 ## 4. Every `WORKAROUND` tag in the code
 
 A workaround for a platform bug is tagged in the code as `WORKAROUND(BUG-…)` so it can be removed once the platform
 is fixed.
 
+**Status on 2026-10-16 (Revision 21):** the class board shows all 25 of our reports as "fixed (live)", but the live
+re-check (read-only) still sees the old shapes in the books' existing data:
+Suryodaya has 64 text fields stored as plain strings next to lists (BUG-001), counts as decimals and 16 date-only
+times (BUG-008), 16 mirror copies (BUG-022) and 32 blank bodies (BUG-023). The fixes change new writes; the
+pre-loaded rows were not rewritten. So **every workaround stays**: each one only accepts more shapes, so it costs
+nothing once the data is clean.
+
 | Tag | File | What it works around |
 |---|---|---|
 | `WORKAROUND(BUG-001)` | `email_agent/contracts/platform.py` | text fields arriving in three shapes |
 | `WORKAROUND(BUG-008)` | `email_agent/contracts/platform.py` | booleans as 0/1, counts as decimals, times without a zone |
 | `WORKAROUND(BUG-022)` | `email_agent/mailbox/conversation.py` | word-for-word mirror copies in the pre-loaded Suryodaya mail |
+| `WORKAROUND(BUG-031)` | `email_agent/platform/mcp_session.py` | replies that break the tool's own declared output schema (Release 13), which the MCP SDK would refuse |

@@ -49,7 +49,7 @@ from email_agent.contracts.agent import (
 )
 from email_agent.contracts.events import OurWrite
 from email_agent.contracts.graph import APPROVAL, ReconcileReport, RunReport
-from email_agent.contracts.llm import LlmReply, Usage
+from email_agent.contracts.llm import Usage
 from email_agent.contracts.memory import Episode, EpisodeGoal
 from email_agent.contracts.runlog import ErrorStep, SyncStep
 from email_agent.graph.capabilities import GRAPH_CAPABILITIES, Capabilities
@@ -71,7 +71,7 @@ from email_agent.platform.writes import WritePath
 from email_agent.record.artifacts import Artifacts
 from email_agent.record.console import ConsoleView, TimedLlm
 from email_agent.record.run_report import write_report
-from email_agent.record.run_view import page_at_run_end
+from email_agent.record.run_view import page_at_run_end, resume_arg
 from email_agent.record.runlog import RunLog
 from email_agent.record.telemetry import at_run_end
 from email_agent.watch.store import EventStore
@@ -88,11 +88,6 @@ class _Progress:
     stopped: Stopped = "max_steps"
     reason: str | None = None
     error: RunError | None = None
-
-
-def served_label(reply: LlmReply) -> str:
-    """Who answered one LLM call: provider/model, plus the Gemini key slot (never the key)."""
-    return f"{reply.provider or '?'}/{reply.model}" + (f" key #{reply.key_slot}" if reply.key_slot else "")
 
 
 def _final(goals: list[Goal], stopped: Stopped, reason: str | None = None, error: RunError | None = None) -> FinalAnswer:
@@ -143,14 +138,6 @@ def run_dir_of(run: str | Path, settings: Settings, runs_dir: Path | None = None
     if not (path / RUN_FILE).exists():
         raise FileNotFoundError(f"no resumable run at {path} (runs from before Revision 12 have no {RUN_FILE})")
     return path
-
-
-def resume_arg(run_dir: Path) -> str:
-    """What to pass to --resume for this run folder: its path, relative when it is under the working directory."""
-    try:
-        return str(run_dir.resolve().relative_to(Path.cwd()))
-    except ValueError:
-        return str(run_dir)
 
 
 async def resume(run: str | Path, settings: Settings, *, llm: Llm | None = None, runs_dir: Path | None = None,
@@ -397,7 +384,7 @@ def _finish(log: RunLog, req: RunRequest, p: _Progress, view: ConsoleView | None
             usage.input_tokens += step.reply.usage.input_tokens
             usage.output_tokens += step.reply.usage.output_tokens
             usage.thinking_tokens += step.reply.usage.thinking_tokens
-            who = served_label(step.reply)
+            who = step.reply.served_by
             served[who] = served.get(who, 0) + 1
     final = _final(p.goals, p.stopped, p.reason, p.error)
     log.write("final.json", final)
