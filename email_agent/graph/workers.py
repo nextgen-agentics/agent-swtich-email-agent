@@ -9,6 +9,7 @@
                       would cause a write (+ a small sample of the rest); only agreed ones are written, disputed ones held
   apply_writes        send the plan through WritePath (guard, dry run, outbox, record)
   answer              the evidence critic (S17), then one LLM call for the goal's answer, then a verifier score
+                      (unless VERIFY_ANSWERS is off, as on official runs)
   refuse              decline a goal (no LLM; an evidence-based refusal goes past the critic first)
 
 Every LLM call is charged to the run's `llm_calls` budget first and logged as an LlmStep (with its node id); every node
@@ -136,13 +137,14 @@ class GraphRuntime:
     def __init__(self, *, ctx: RunContext, store: RunStore, mirror: MailboxStore, action: Action, writes: WritePath,
                  llm: Llm, log: RunLog, skills: SkillRegistry, caps: Capabilities, cache: VerdictCache | None,
                  goals: Callable[[], dict[str, Any]], route: Any = None, validate: bool = True,
-                 approve_writes: bool = False):
+                 approve_writes: bool = False, verify: bool = True):
         self.ctx, self.store, self.mirror, self.action, self.writes = ctx, store, mirror, action, writes
         self.llm, self.log, self.skills, self.caps, self.cache = llm, log, skills, caps, cache
         self.goals = goals                      # goal id → Goal, owned by the planner
         self.round = 0                          # the planner's round, for step numbering
         self.route, self.validate = route, validate   # the RoutedLlm under `llm` (for the validator's other model)
         self.approve_writes = approve_writes    # in a dry run too: it stops before recording what would be written
+        self.verify = verify                    # the quality score after each answer (off on official runs)
         self._reused: set[tuple[str, str]] = set()   # saved replies already reused in this process (each once)
         self.vector_candidates = 10             # hybrid search: at most N added by meaning (Settings.search_vector_*)
         self.vector_margin = 0.04               # … within this of the best meaning score
@@ -506,6 +508,9 @@ class GraphRuntime:
                   for w, o in zip(plan.writes, outcomes) if not o.ok]
         return {"skill": join.skill, "written": sum(o.ok for o in outcomes), "failed": failed,
                 "already_right": len(plan.unchanged), "dry_run": self.writes.dry_run,
+                # named, not only counted: the evidence critic must see that each one is accounted for (Revision 25,
+                # a rehearsal where 4 conversations already flagged cost two "not ready" rounds)
+                "already_right_threads": plan.unchanged,
                 "writes": [{"thread_id": w.thread_id, "tool": w.tool,
                             "fields": {k: v for k, v in w.fields.items() if k not in ("id", "content", "company_id")},
                             "why": w.why} for w, o in zip(plan.writes, outcomes) if o.ok]}
@@ -588,6 +593,8 @@ class GraphRuntime:
     async def _verify(self, task: TaskSpec, goal_text: str, evidence: list[dict[str, Any]],
                       answer: str) -> VerifierScore | None:
         """S17's verifier: a score and a critique for the answer, kept as evidence (it never changes the answer)."""
+        if not self.verify:
+            return None
         text = "\n\n".join([f"GOAL: {goal_text}", f"EVIDENCE:\n{json.dumps(evidence, ensure_ascii=False)[:30000]}",
                              f"ANSWER:\n{answer}"])
         req = LlmRequest(purpose="verifier", system=VERIFIER_SYSTEM, messages=[ChatMessage(role="user", text=text)],

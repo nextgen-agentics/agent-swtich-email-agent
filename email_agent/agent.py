@@ -223,7 +223,8 @@ async def _graph(req: RunRequest, settings: Settings, llm: Llm | None, log: RunL
             planner: RunPlanner | None = None
             rt = GraphRuntime(ctx=ctx, store=store, mirror=mirror, action=action, writes=writes, llm=llm, log=log,
                               skills=skills, caps=caps, cache=verdicts, goals=lambda: planner.goals if planner else {},
-                              route=route, validate=settings.validate_verdicts, approve_writes=req.approve_writes)
+                              route=route, validate=settings.validate_verdicts, approve_writes=req.approve_writes,
+                              verify=settings.verify_answers)
             # the history is fixed when the run starts (kept in run.sqlite), so a resumed run's first planner round is
             # the same request and its saved reply is reused
             history = store.context().get("history", []) if resumed else (

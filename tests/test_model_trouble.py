@@ -42,9 +42,8 @@ def _gemini_error(code: int, status: str, **extra) -> errors.APIError:
     return errors.APIError(code, {"error": {"code": code, "message": status, "status": status, **extra}})
 
 
-RATE_LIMITED = _gemini_error(
-    429, "RESOURCE_EXHAUSTED", details=[{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "30s"}]
-)
+RATE_LIMITED = _gemini_error(429, "RESOURCE_EXHAUSTED",
+                             details=[{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "30s"}])
 BAD_KEY = _gemini_error(401, "UNAUTHENTICATED")
 
 
@@ -65,9 +64,8 @@ async def test_a_rate_limited_key_rests_and_the_next_key_answers_the_whole_run(s
 
 async def test_when_every_model_is_dead_the_run_stops_saying_why_and_keeps_its_files(settings, platform, mail):
     mail.conversation("Samples", them("Could you send two samples?", "2026-10-04T09:00:00"))
-    route = RoutedLlm(
-        [Option("gemini", "fake-flash", 1, Refusing(BAD_KEY)), Option("gemini", "fake-flash", 2, Refusing(BAD_KEY))]
-    )
+    route = RoutedLlm([Option("gemini", "fake-flash", 1, Refusing(BAD_KEY)),
+                       Option("gemini", "fake-flash", 2, Refusing(BAD_KEY))])
 
     out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=route)
 
@@ -80,11 +78,8 @@ async def test_when_every_model_is_dead_the_run_stops_saying_why_and_keeps_its_f
 
 
 def _openai_429(body: dict) -> openai.RateLimitError:
-    return openai.RateLimitError(
-        f"Error code: 429 - {body}",
-        body=body,
-        response=httpx.Response(429, request=httpx.Request("POST", "http://model/v1")),
-    )
+    return openai.RateLimitError(f"Error code: 429 - {body}", body=body,
+                                 response=httpx.Response(429, request=httpx.Request("POST", "http://model/v1")))
 
 
 async def test_a_spent_token_budget_stops_every_model_on_that_key_at_once_but_a_rate_limit_only_rests():
@@ -107,6 +102,46 @@ async def test_a_spent_token_budget_stops_every_model_on_that_key_at_once_but_a_
     assert not route.budget_spent() and route.options[0].dead_reason is None, "a plain 429 rests, it does not die"
 
 
+class Counting(ScriptedModel):
+    """A scripted model that bills a fixed number of tokens per call, like a real client's `tokens_used`."""
+
+    def __init__(self, per_call: int, **kw):
+        super().__init__(**kw)
+        self.per_call, self.tokens_used = per_call, 0
+
+    async def chat(self, req):
+        self.tokens_used += self.per_call
+        return await super().chat(req)
+
+
+async def test_once_its_token_share_is_used_the_route_stops_like_a_spent_budget():
+    # Revision 25: one token budget covers both books of an official run, so each book stops at its own share.
+    model = Counting(per_call=100, goals=[TRIAGE])
+    route = RoutedLlm([Option("openai", "model-a", None, model)], token_limit=150)
+    request = LlmRequest(purpose="goals", system="s", messages=[ChatMessage(role="user", text="hi")])
+
+    await route.chat(request)
+    await route.chat(request)                     # 100 of 150 used: the call that crosses the share still runs
+    with pytest.raises(LlmError, match="share of the token budget is used: 200 of 150"):
+        await route.chat(request)
+
+    assert len(model.requests) == 2 and route.tokens_used == 200
+    assert route.budget_spent() and route.share_used()
+
+
+async def test_with_the_quality_score_off_the_answer_is_the_same_and_no_verifier_is_asked(settings, platform, mail):
+    mail.conversation("Samples", them("Could you send two samples?", "2026-10-04T09:00:00"))
+    answers = []
+    for verify in (True, False):
+        model = ScriptedModel(goals=[TRIAGE], verdict=_needs_reply)
+        out = await agent.run(REPLY_CHECK, "suryodaya", settings.model_copy(update={"verify_answers": verify}),
+                              today=TODAY, llm=model)
+        assert final(out.run_dir).stopped == "done"
+        assert len(model.calls("verifier")) == (1 if verify else 0)
+        answers.append(final(out.run_dir).answer)
+    assert answers[0] == answers[1]
+
+
 async def test_an_unknown_capability_from_the_planner_is_sent_back_and_repaired(settings, platform, mail):
     mail.conversation("Samples", them("Could you send two samples?", "2026-10-04T09:00:00"))
 
@@ -114,7 +149,6 @@ async def test_an_unknown_capability_from_the_planner_is_sent_back_and_repaired(
         if not body["graph"] and "your_previous_proposals_were_rejected" not in body:
             return {"tasks": [task("mail_them", "send_email", "g1", to="buyer@acme.in")], "reason": "just reply"}
         return judge_then_answer(body)
-
     model = ScriptedModel(goals=[TRIAGE], plan=plan, verdict=_needs_reply)
 
     out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model)
@@ -139,17 +173,14 @@ async def test_a_planner_that_never_makes_sense_ends_the_run_cleanly(settings, p
 
 async def test_a_verdict_about_a_conversation_the_judge_was_not_given_is_never_written(settings, platform, mail):
     asks = mail.conversation("Samples", them("Could you send two samples?", "2026-10-04T09:00:00"))
-    answered = mail.conversation(
-        "Visit", them("Can we visit Friday?", "2026-10-02T10:00:00"), us("Yes, Friday works.", "2026-10-02T15:00:00")
-    )
+    answered = mail.conversation("Visit", them("Can we visit Friday?", "2026-10-02T10:00:00"),
+                                 us("Yes, Friday works.", "2026-10-02T15:00:00"))
     model = ScriptedModel(goals=[TRIAGE], verdict=_needs_reply)
     honest = model.scripts["judge"]
-    replies = iter(
-        [
-            lambda req: {"verdicts": [{"thread_id": t, **_needs_reply(t)} for t in [*thread_ids(req), answered]]},
-            honest,
-        ]
-    )
+    replies = iter([
+        lambda req: {"verdicts": [{"thread_id": t, **_needs_reply(t)} for t in [*thread_ids(req), answered]]},
+        honest,
+    ])
     model.scripts["judge"] = lambda req: next(replies)(req)
 
     out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model)
@@ -165,9 +196,8 @@ async def test_a_conversation_the_second_model_disputes_is_held_not_written(sett
     agreed = mail.conversation("Samples", them("Could you send two samples?", "2026-10-04T09:00:00"))
     disputed = mail.conversation("FYI", them("Just so you know, the plant is closed Monday.", "2026-10-04T10:00:00"))
     judge = ScriptedModel(goals=[TRIAGE], verdict=_needs_reply, model="judge-model")
-    second = ScriptedModel(
-        goals=[TRIAGE], verdict=lambda t: {"needs_reply": t == agreed, "why": "only a notice"}, model="validator-model"
-    )
+    second = ScriptedModel(goals=[TRIAGE], verdict=lambda t: {"needs_reply": t == agreed, "why": "only a notice"},
+                           model="validator-model")
     route = RoutedLlm([Option("gemini", "judge-model", 1, judge), Option("openai", "validator-model", None, second)])
 
     out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=route)
@@ -180,7 +210,7 @@ async def test_a_conversation_the_second_model_disputes_is_held_not_written(sett
 
 
 async def test_the_model_call_budget_is_never_overspent(settings, platform, mail):
-    settings.max_llm_calls = 3  # goals, the first plan, one shard; then nothing more
+    settings.max_llm_calls = 3                         # goals, the first plan, one shard; then nothing more
     for n in range(45):
         mail.conversation(f"Order {n}", them(f"Please confirm order {n}.", f"2026-10-04T09:{n:02d}:00"))
     model = ScriptedModel(goals=[TRIAGE], verdict=_needs_reply)
@@ -201,7 +231,6 @@ async def test_a_critic_that_keeps_rejecting_is_overruled_after_two_tries(settin
         if (req.response_schema or {}).get("title") == "VerifierScore":
             return {"score": 60, "critique": "thin", "issues": []}
         return {"ready": False, "missing": ["the customer's phone number"], "reason": "not in the evidence"}
-
     model = ScriptedModel(goals=[TRIAGE], verdict=_needs_reply, critic=never_ready)
 
     out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model)

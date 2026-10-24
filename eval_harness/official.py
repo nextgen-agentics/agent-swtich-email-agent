@@ -22,9 +22,12 @@ here). It then reads results.json. What this does:
    less when the runner says less time is left); a task that no longer fits is written as not run. Once the model
    answers 429 `budget_exhausted` (the run's token budget is spent), the remaining tasks are written as not run. Anything unexpected becomes a `runner-crash` row, and the last row
    (`result-contract`) checks the rows themselves. The exit code is always 0: the runner scores results.json.
+4. Tokens (Revision 25): one token budget covers the whole submission, both books, so each book keeps to its share
+   (TOKEN_SHARES, or --token-budget / OFFICIAL_TOKEN_BUDGET). Once the share is used, the route stops calling the
+   model and the remaining tasks are written as not run, before the runner's 429. Each row shows its tokens.
 
-It reads no .env, and uses only the runner's model (provider "openai", no fallback, full-text search), so a local
-rehearsal behaves like the official run. The seat token, the model key and both base URLs never appear in a row or in
+It reads no .env, and uses only the runner's model (provider "openai", no fallback, full-text search, no quality
+score), so a local rehearsal behaves like the official run. The seat token, the model key and both base URLs never appear in a row or in
 the printed output. Locally the books are the live shared ones, not fresh copies: take the writes back with
 `scripts/agent/undo_run.py eval_runs/<batch>`. How to run and submit: docs/project/official-runs.md.
 """
@@ -68,6 +71,12 @@ MIN_TASK_S = 60.0           # a task is started only with at least this much tim
 SCORE_RESERVE_S = 45.0      # kept back from a task's run for reading the database and scoring it
 END_RESERVE_S = 180.0       # kept back from the runner's own time left, as 27 of its 30 minutes are
 CHECK_TIMEOUT_S = 120.0     # each connection check
+RUN_TOKEN_BUDGET = 300_000  # one submission's token budget, both books together (the "Our harness" panel, 23 Oct)
+TOKEN_RESERVE = 0.10        # kept back: calls already running when the share is reached still finish
+# agentswitch-harness.toml runs suryodaya, then keystone, in one submission. The books do not cost the same: the local
+# rehearsal of the two official tasks (23 Oct, DeepSeek-V4.1-Flash, reasoning off) used 63k on Suryodaya and 128k on
+# Keystone (two mailboxes, four price batches), so each gets its own share of the 270k left after the reserve.
+TOKEN_SHARES = {"suryodaya": 100_000, "keystone": 170_000}
 MODEL_CHECK_SCHEMA = {"title": "ModelCheck", "type": "object", "properties": {"ok": {"type": "boolean"}},
                       "required": ["ok"]}
 
@@ -114,10 +123,17 @@ def run_budget_s(settings: Settings, budget_min: float) -> tuple[float, str]:
     return max(0.0, left - END_RESERVE_S), f"budget {max(0.0, left - END_RESERVE_S) / 60:.1f} min (from {source})"
 
 
-def official_settings(settings: Settings) -> Settings:
-    """Only the runner's model: no Gemini, no W&B key or project, no fallback, full-text search."""
+def book_share(instance: str) -> int | None:
+    """This book's share of the run's token budget (None for a book we do not know: no limit)."""
+    return TOKEN_SHARES.get(instance)
+
+
+def official_settings(settings: Settings, token_budget: int | None = None) -> Settings:
+    """Only the runner's model: no Gemini, no W&B key or project, no fallback, full-text search; no quality score
+    (it never changes an answer), and at most `token_budget` tokens for this book (None = no limit)."""
     return settings.model_copy(update={"provider": "openai", "model": None, "fallback": False, "search": "fts",
-                                       "wandb_api_key": None, "wandb_project": None})
+                                       "wandb_api_key": None, "wandb_project": None, "verify_answers": False,
+                                       "llm_token_limit": token_budget})
 
 
 class Scrubber:
@@ -162,10 +178,15 @@ class Results:
         self.rows: list[ResultTask] = []
         self.left_out = 0                              # tasks not run because their answer key is not decided
 
-    def add(self, task_id: str, title: str, passed: bool, evidence: str, seconds: float | None = None) -> ResultTask:
-        evidence = self.scrub(evidence) + (f" [{seconds:.1f} s]" if seconds is not None else "")
-        if len(evidence) > 500:
-            evidence = evidence[:480] + " … " + evidence[-15:]   # keep the seconds at the end
+    def add(self, task_id: str, title: str, passed: bool, evidence: str, seconds: float | None = None,
+            tokens: int | None = None) -> ResultTask:
+        cost = [f"{seconds:.1f} s"] if seconds is not None else []
+        cost += [f"{tokens / 1000:.1f}k tokens"] if tokens is not None else []
+        tail = f" [{' · '.join(cost)}]" if cost else ""
+        evidence = self.scrub(evidence)
+        if len(evidence) + len(tail) > 500:
+            evidence = evidence[:497 - len(tail)] + " …"           # keep the seconds and tokens at the end
+        evidence += tail
         row = ResultTask(id=f"{self.instance}:{task_id}", title=self.scrub(title)[:200], passed=passed,
                          score=1.0 if passed else 0.0, evidence=evidence)
         self.rows.append(row)
@@ -233,7 +254,7 @@ async def check_model(settings: Settings, llm: Llm | None) -> tuple[bool, str]:
     except Exception as e:  # noqa: BLE001 — reported as the check's evidence
         return False, f"{settings.openai_model}: {describe(e)}"
     return ok, (f"{reply.model} answered {reply.text[:60]!r} ({reply.usage.input_tokens} in / "
-                f"{reply.usage.output_tokens} out tokens)")
+                f"{reply.usage.output_tokens} out / {reply.usage.thinking_tokens} thinking tokens)")
 
 
 # ── tasks ─────────────────────────────────────────────────────────────────────
@@ -264,12 +285,14 @@ def choose_tasks(instance: str, *, only: list[str] | None = None, ready_only: bo
 
 async def official_run(settings: Settings, results_path: Path, *, check_only: bool = False, only: list[str] | None = None,
                        ready_only: bool = False, budget_min: float = BUDGET_MIN, task_max_min: float = TASK_MAX_MIN,
-                       llm: Llm | None = None, tasks: list[Task] | None = None) -> Results:
-    """Never raises for a failure: each one becomes a row. `llm`, `tasks`: given ones (tests)."""
+                       token_budget: int | None = None, llm: Llm | None = None,
+                       tasks: list[Task] | None = None) -> Results:
+    """Never raises for a failure: each one becomes a row. `token_budget`: None = the book's share (TOKEN_SHARES),
+    0 = no limit. `llm`, `tasks`: given ones (tests)."""
     results = Results(results_path, settings.agentswitch_instance or "unknown", Scrubber(settings))
     try:
         await _run(settings, results, check_only=check_only, only=only, ready_only=ready_only, budget_min=budget_min,
-                   task_max_min=task_max_min, llm=llm, tasks=tasks)
+                   task_max_min=task_max_min, token_budget=token_budget, llm=llm, tasks=tasks)
     except Exception as e:  # noqa: BLE001 — every failure has to end up as a row
         results.add("runner-crash", "The official run finished without an unexpected error", False, describe(e))
     except BaseException as e:   # Ctrl-C or a cancelled task: say so in the file, then stop as asked
@@ -284,7 +307,8 @@ async def official_run(settings: Settings, results_path: Path, *, check_only: bo
 
 
 async def _run(settings: Settings, results: Results, *, check_only: bool, only: list[str] | None, ready_only: bool,
-               budget_min: float, task_max_min: float, llm: Llm | None, tasks: list[Task] | None) -> None:
+               budget_min: float, task_max_min: float, token_budget: int | None, llm: Llm | None,
+               tasks: list[Task] | None) -> None:
     budget_s, budget_text = run_budget_s(settings, budget_min)
     deadline = time.monotonic() + budget_s
     instance = results.instance
@@ -294,9 +318,11 @@ async def _run(settings: Settings, results: Results, *, check_only: bool, only: 
                f"unknown instance {instance!r}; ours are {sorted(INSTANCES)}")
         results.add("setup", "The AgentSwitch runner's variables are all set", False, why)
         return
-    settings = official_settings(settings)
+    token_budget = book_share(instance) if token_budget is None else (token_budget or None)
+    settings = official_settings(settings, token_budget)
+    tokens_text = f"{token_budget / 1000:.0f}k tokens for this book" if token_budget else "no token limit"
     print(f"official run on {instance}: model {settings.openai_model}, {budget_text}, "
-          f"{task_max_min:.0f} min per task", flush=True)
+          f"{task_max_min:.0f} min per task, {tokens_text}", flush=True)
 
     started = time.monotonic()
     platform_ok, evidence = await check_platform(settings, instance)
@@ -318,14 +344,17 @@ async def _run(settings: Settings, results: Results, *, check_only: bool, only: 
     batch = new_batch()
     verdicts: list[Verdict] = []
     route = llm or make_llm(settings)                    # the agent's runs share this route and its health
+    counted = route if isinstance(route, RoutedLlm) else None
     for task in chosen:
         left = deadline - time.monotonic()
-        if not blocked and isinstance(route, RoutedLlm) and route.budget_spent():
-            blocked = "the model's token budget is spent (429 budget_exhausted)"
+        if not blocked and counted and counted.budget_spent():
+            blocked = (f"our share of the run's token budget is used ({counted.tokens_used / 1000:.0f}k of "
+                       f"{(token_budget or 0) / 1000:.0f}k tokens for this book)" if counted.share_used()
+                       else "the model's token budget is spent (429 budget_exhausted)")
         if blocked or left < MIN_TASK_S:
             results.add(task.id, title_of(task), False, f"not run: {blocked or 'time budget'}")
             continue
-        started = time.monotonic()
+        started, tokens_before = time.monotonic(), counted.tokens_used if counted else 0
         cap = min(left - SCORE_RESERVE_S, (task.max_minutes or task_max_min) * 60)
         saved = await run_task(task, settings, batch, llm=llm, time_limit_s=max(1.0, cap))
         try:
@@ -336,7 +365,7 @@ async def _run(settings: Settings, results: Results, *, check_only: bool, only: 
         verdict = verdict_of(saved, snap, snap_error)
         verdicts.append(verdict)
         results.add(task.id, title_of(task), verdict.status == "approve", evidence_of(verdict),
-                    time.monotonic() - started)
+                    time.monotonic() - started, counted.tokens_used - tokens_before if counted else None)
     if verdicts:
         _save_batch_report(batch, verdicts)
 
@@ -389,6 +418,11 @@ def main() -> None:
                     help=f"stop starting tasks after this many minutes (default {BUDGET_MIN:.0f}, or OFFICIAL_BUDGET_MIN)")
     ap.add_argument("--task-max-min", type=float, default=TASK_MAX_MIN,
                     help=f"one task's time cap unless tasks.yaml sets max_minutes (default {TASK_MAX_MIN:.0f})")
+    env_budget = os.environ.get("OFFICIAL_TOKEN_BUDGET")
+    ap.add_argument("--token-budget", type=int, default=int(env_budget) if env_budget else None,
+                    help="this book's share of the run's token budget (default: "
+                         + ", ".join(f"{b} {n:,}" for b, n in TOKEN_SHARES.items())
+                         + ", or OFFICIAL_TOKEN_BUDGET; 0 = no limit)")
     ap.add_argument("--list", action="store_true", help="only print which tasks would run, and why others are left out")
     ap.add_argument("--validate", type=Path, metavar="FILE", help="only check a results file against the format")
     args = ap.parse_args()
@@ -411,7 +445,7 @@ def main() -> None:
     if settings is not None:
         results = asyncio.run(official_run(settings, args.results, check_only=args.check, only=only,
                                            ready_only=args.ready_only, budget_min=args.budget_min,
-                                           task_max_min=args.task_max_min))
+                                           task_max_min=args.task_max_min, token_budget=args.token_budget))
     took = (datetime.now(timezone.utc) - started).total_seconds() / 60
     print(f"{results.summary()} — {took:.1f} min — written to {args.results}", flush=True)
     # always exit 0: the AgentSwitch runner scores results.json, not the exit code

@@ -11,6 +11,11 @@ W&B = each model in WANDB_MODELS. Each call goes to the first usable option. A f
 option rests (rate limit, daily quota, server trouble), dies (bad key, unknown model, spent token budget), or is
 skipped for this call only (ran out of thinking budget). Health is shared by the whole process, so a test-suite batch carries it from
 task to task. Every reply records who answered (provider, model, key SLOT — never a key).
+
+Every billed token is counted per client (`tokens_used`, a cut-off reply included). With LLM_TOKEN_LIMIT set (the
+official run's share of the run's token budget, Revision 25), the route stops calling once that many are used: every
+option dies with "token share used", exactly as on a spent budget (429 `budget_exhausted`). Calls already running
+finish, so a book can go a little over its share.
 """
 
 from __future__ import annotations
@@ -79,6 +84,7 @@ class GeminiClient:
     def __init__(self, model: str, api_key: str, thinking_level: str | None = "MINIMAL", timeout_s: float = 180.0):
         self.model = model
         self.thinking_level = thinking_level
+        self.tokens_used = 0                   # every billed token of this client (Revision 25)
         self._client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=int(timeout_s * 1000)))
 
     def _config(self, req: LlmRequest) -> types.GenerateContentConfig:
@@ -106,6 +112,9 @@ class GeminiClient:
         if resp.candidates and resp.candidates[0].content and resp.candidates[0].content.parts:
             text = "".join(p.text for p in resp.candidates[0].content.parts if p.text and not p.thought)
         meta = resp.usage_metadata
+        if meta:
+            self.tokens_used += (meta.prompt_token_count or 0) + (meta.candidates_token_count or 0) + \
+                (meta.thoughts_token_count or 0)
         return LlmReply(
             model=self.model,
             text=text.strip(),
@@ -126,6 +135,7 @@ JSON_MODES = ("json_schema", "json_object", "prompt")
 _JSON_REFUSED = ("response_format", "response format", "json_schema", "json_object", "structured output",
                  "guided_json", "guided decoding")
 _THINKING_REFUSED = ("chat_template_kwargs", "enable_thinking")
+_EFFORT_REFUSED = ("reasoning_effort",)
 
 
 def _max_tokens_refused(text: str) -> bool:
@@ -161,10 +171,11 @@ class OpenAICompatClient:
 
     Reasoning models (e.g. zai-org/GLM-5.3-Flash) think before answering and that counts against
     max_tokens; a reply cut off by the limit is retried once with double the budget. With `thinking=False` the model is
-    asked not to reason (chat_template_kwargs.enable_thinking=false), where it allows that.
+    asked not to reason, both ways: chat_template_kwargs.enable_thinking=false (W&B) and reasoning_effort="none"
+    (Fireworks, where the AgentSwitch runner's model runs, Revision 25), where it allows that.
 
     An endpoint that refuses part of a request (HTTP 400) is asked again without it, once, and never sent it again:
-    the reasoning flag; `max_tokens` (Revision 19: the server's own default applies); and the JSON mode, which steps
+    each reasoning flag; `max_tokens` (Revision 19: the server's own default applies); and the JSON mode, which steps
     down json_schema → json_object → the schema in the prompt only. A JSON answer is taken out of a code fence or
     surrounding text when needed."""
 
@@ -174,6 +185,8 @@ class OpenAICompatClient:
         self.max_tokens = max_tokens
         self.thinking = thinking
         self._thinking_flag_ok = True                                # set False if the endpoint refuses it once
+        self._effort_flag_ok = True                                  # set False if the endpoint refuses it once
+        self.tokens_used = 0                                         # every billed token, cut-off replies included
         self._max_tokens_ok = True                                   # set False if the endpoint refuses it once
         headers = {"OpenAI-Project": project} if project else {}
         self._client = http or openai.AsyncOpenAI(api_key=api_key, base_url=base_url, default_headers=headers,
@@ -196,13 +209,22 @@ class OpenAICompatClient:
                            + json.dumps(req.response_schema))
         kw["messages"] = [{"role": "system", "content": system}] + [
             {"role": "assistant" if m.role == "model" else "user", "content": m.text} for m in req.messages]
+        extra: dict[str, Any] = {}
         if not self.thinking and self._thinking_flag_ok:
-            kw["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+            extra["chat_template_kwargs"] = {"enable_thinking": False}
+        if not self.thinking and self._effort_flag_ok:
+            extra["reasoning_effort"] = "none"          # in extra_body, so the SDK does not check the value
+        if extra:
+            kw["extra_body"] = extra
         return kw
 
     def _drop_refused(self, req: LlmRequest, e: openai.BadRequestError) -> bool:
         """Stop sending the part of the request this 400 refuses. False = nothing left to drop (a real error)."""
         text = str(e).lower()
+        if not self.thinking and self._effort_flag_ok and any(w in text for w in _EFFORT_REFUSED):
+            self._effort_flag_ok = False                # before the max_tokens rule: its loose match is not this
+            log.warning("⏳ %s refused reasoning_effort=none: asking without it from now on", self.model)
+            return True
         if not self.thinking and self._thinking_flag_ok and any(w in text for w in _THINKING_REFUSED):
             self._thinking_flag_ok = False              # this model cannot switch reasoning off: ask without
             log.warning("⏳ %s refused enable_thinking=false: asking without it from now on", self.model)
@@ -230,31 +252,41 @@ class OpenAICompatClient:
                             raise
                 return await self._client.chat.completions.create(**self._kwargs(req, max_tokens))
 
+    def _count(self, resp: Any) -> tuple[int, int, int]:
+        """(input, output, thinking) tokens of one response, added to `tokens_used`: every response is billed."""
+        u = resp.usage
+        details = getattr(u, "completion_tokens_details", None) if u else None
+        counted = ((u.prompt_tokens or 0) if u else 0, (u.completion_tokens or 0) if u else 0,
+                   (getattr(details, "reasoning_tokens", 0) or 0) if details else 0)
+        self.tokens_used += counted[0] + counted[1]
+        return counted
+
     async def chat(self, req: LlmRequest) -> LlmReply:
         started = time.perf_counter()
         resp = await self._create(req, self.max_tokens)
+        cut_off = (0, 0, 0)                             # the tokens of a cut-off first reply: billed, so reported
         choice = resp.choices[0]
         # Cut off by the token limit: the text (if any) is half an answer, never a whole one.
         if choice.finish_reason == "length" and self._max_tokens_ok:
+            cut_off = self._count(resp)
             log.warning("⏳ %s ran out of its %d-token budget before finishing: retrying once with %d",
                         self.model, self.max_tokens, self.max_tokens * 2)
             resp = await self._create(req, self.max_tokens * 2)   # the thinking used up the budget: once more
             choice = resp.choices[0]
             if choice.finish_reason == "length":
+                self._count(resp)
                 raise BudgetExceeded(f"{self.model} used all {self.max_tokens * 2} tokens without finishing its "
                                      "reply; raise LLM_MAX_TOKENS in .env or choose another model")
+        counted = self._count(resp)
         if choice.finish_reason == "length":            # the server's own budget (max_tokens refused) ran out too
             raise BudgetExceeded(f"{self.model} ran out of the server's reply budget without finishing its reply")
         msg = choice.message
-        u = resp.usage
-        details = getattr(u, "completion_tokens_details", None) if u else None
         return LlmReply(
             model=self.model,
             text=extract_json(msg.content or "") if req.response_schema else (msg.content or "").strip(),
             finish_reason=choice.finish_reason,
-            usage=Usage(input_tokens=(u.prompt_tokens or 0) if u else 0,
-                        output_tokens=(u.completion_tokens or 0) if u else 0,
-                        thinking_tokens=(getattr(details, "reasoning_tokens", 0) or 0) if details else 0),
+            usage=Usage(input_tokens=counted[0] + cut_off[0], output_tokens=counted[1] + cut_off[1],
+                        thinking_tokens=counted[2] + cut_off[2]),
             elapsed_ms=(time.perf_counter() - started) * 1000,
         )
 
@@ -265,6 +297,7 @@ Kind = Literal["rate_limit", "daily_quota", "dead_key", "budget_spent", "dead_mo
 # The AgentSwitch runner's model answers 429 with this code once the run's token budget is spent (instructor's harness
 # rules, Oct 2026). It never comes back, so it is not a rate limit to wait out.
 BUDGET_SPENT_CODE = "budget_exhausted"
+TOKEN_SHARE_USED = "token share used"   # our own limit (LLM_TOKEN_LIMIT) reached: a dead reason, like a spent budget
 
 
 @dataclass
@@ -406,14 +439,20 @@ class RoutedLlm:
     """Tries each option in priority order; see the module docstring for what each failure does."""
 
     def __init__(self, options: list[Option], wait_max_s: float = 120.0, breaker_s: float = 60.0, text: str = "",
-                 call_ceiling_s: float = 900.0):
+                 call_ceiling_s: float = 900.0, token_limit: int | None = None):
         if not options:
             raise LlmError("no LLM key is set: add GEMINI_API_KEY and/or WANDB_API_KEY (or OPENAI_API_KEY) to .env")
         self.options, self.wait_max_s, self.breaker_s, self.text = options, wait_max_s, breaker_s, text
         # A hard limit per option per call: SDK timeouts measure the gap between bytes, so a server that keeps a
         # connection open without finishing can slip past them (two W&B calls hung for 50+ minutes, 2026-10-03).
         self.call_ceiling_s = call_ceiling_s
+        self.token_limit = token_limit
         self.model = options[0].model
+
+    @property
+    def tokens_used(self) -> int:
+        """Every billed token so far, over this route's clients (a client without a count, e.g. a test's, adds 0)."""
+        return sum(getattr(o.client, "tokens_used", 0) for o in self.options)
 
     def without_model(self, model: str | None) -> "RoutedLlm | None":
         """The same route minus every option of `model` (the validator must not be the model it checks). The options
@@ -421,7 +460,8 @@ class RoutedLlm:
         rest = [o for o in self.options if o.model != model]
         if not rest:
             return None
-        return RoutedLlm(rest, self.wait_max_s, self.breaker_s, self.text, call_ceiling_s=self.call_ceiling_s)
+        return RoutedLlm(rest, self.wait_max_s, self.breaker_s, self.text, call_ceiling_s=self.call_ceiling_s,
+                         token_limit=self.token_limit)
 
     def _apply(self, opt: Option, f: Failure) -> None:
         now = time.monotonic()
@@ -441,10 +481,20 @@ class RoutedLlm:
                     o.dead_reason = "model unavailable"
 
     def budget_spent(self) -> bool:
-        """Every option is dead because the token budget is spent: no call can succeed for the rest of the run."""
-        return all(o.dead_reason == "token budget spent" for o in self.options)
+        """Every option is dead because the token budget is spent (the runner's 429, or our own share used): no call
+        can succeed for the rest of the run."""
+        return self.share_used() or all(o.dead_reason in ("token budget spent", TOKEN_SHARE_USED) for o in self.options)
+
+    def share_used(self) -> bool:
+        """Our own LLM_TOKEN_LIMIT is reached (before the next call notices it), not the runner's 429."""
+        return (self.token_limit is not None and self.tokens_used >= self.token_limit) or \
+            any(o.dead_reason == TOKEN_SHARE_USED for o in self.options)
 
     async def chat(self, req: LlmRequest) -> LlmReply:
+        if self.token_limit is not None and self.tokens_used >= self.token_limit:
+            for o in self.options:
+                o.dead_reason = o.dead_reason or TOKEN_SHARE_USED
+            raise LlmError(f"our share of the token budget is used: {self.tokens_used} of {self.token_limit} tokens")
         deadline = time.monotonic() + self.wait_max_s
         failed_now: set[int] = set()               # options that could not finish THIS call (no rest)
         while True:
@@ -516,13 +566,13 @@ def build_route(settings: Settings) -> RoutedLlm:
         options.append(Option(provider=provider, model=model, key_slot=slot, client=client))
     # ceiling = every try a client may make for one reply (2 quick tries × the doubled-budget retry) + margin
     return RoutedLlm(options, settings.llm_wait_max_s, settings.llm_breaker_s, route_text(settings),
-                     call_ceiling_s=settings.llm_timeout_s * QUICK_TRIES * 2 + 30)
+                     call_ceiling_s=settings.llm_timeout_s * QUICK_TRIES * 2 + 30, token_limit=settings.llm_token_limit)
 
 
 def make_llm(settings: Settings) -> RoutedLlm:
     """One route per settings for the whole process, so option health carries from run to run (test-suite batches)."""
     key = (tuple(plan_route(settings)), settings.llm_max_tokens, settings.llm_wait_max_s, settings.llm_breaker_s,
-           settings.gemini_thinking_level, settings.llm_timeout_s, settings.openai_base_url)
+           settings.gemini_thinking_level, settings.llm_timeout_s, settings.openai_base_url, settings.llm_token_limit)
     if key not in _ROUTES:
         _ROUTES[key] = build_route(settings)
     return _ROUTES[key]

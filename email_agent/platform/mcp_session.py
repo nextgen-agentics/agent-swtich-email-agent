@@ -23,8 +23,8 @@ with a warning and the caller goes on.
 
 WORKAROUND(BUG-031): the SDK checks every tool reply against the output schema the tool declares, and refuses the
 whole reply on any mismatch. Since Release 13 (21 Oct) EmailThread.list declares `participant_names` as a string but
-returns a list, so every listing of conversations failed. A mismatch is now logged once per tool and kept in
-`schema_mismatches`; our own contracts (email_agent/contracts/platform.py, which accept both shapes) read the reply.
+returns a list, so every listing of conversations failed. A mismatch is now logged once per tool and instance in a
+process (Revision 25; each task opens a new session) and kept in every session's `schema_mismatches`; our own contracts (email_agent/contracts/platform.py, which accept both shapes) read the reply.
 """
 
 from __future__ import annotations
@@ -48,6 +48,7 @@ from email_agent.contracts.transport import HttpExchange
 from email_agent.platform.rest import Recorder, RestClient, redact
 
 logger = logging.getLogger(__name__)
+_MISMATCHES_LOGGED: set[tuple[str, str]] = set()     # (instance, tool) already warned about (WORKAROUND(BUG-031))
 
 
 def _json_or_text(raw: bytes) -> Any:
@@ -131,6 +132,8 @@ class McpSession:
             except RuntimeError as e:
                 if name not in self.schema_mismatches:
                     self.schema_mismatches[name] = str(e)[:500]
+                if (self.instance.name, name) not in _MISMATCHES_LOGGED:
+                    _MISMATCHES_LOGGED.add((self.instance.name, name))
                     logger.warning("%s on %s: the reply does not match the tool's own output schema; read with our "
                                    "contracts instead (BUG-031): %s", name, self.instance.name, str(e).splitlines()[0])
 

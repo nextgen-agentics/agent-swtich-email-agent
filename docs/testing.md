@@ -95,7 +95,7 @@ each book, with **its own model** and **our seat's token**. There is no `.env` a
 
 ```toml
 install = "pip install uv && uv sync --frozen --no-dev"
-run     = "uv run --frozen --no-sync python -m eval_harness.official --ready-only"
+run     = "uv run --frozen --no-sync python -m eval_harness.official --ready-only --only seat-request-suryodaya,refuse-price-not-agreed-suryodaya,seat-request-keystone,refuse-price-not-agreed-keystone"
 results = "results.json"
 instances = ["suryodaya", "keystone"]
 timeout_minutes = 30
@@ -104,18 +104,28 @@ timeout_minutes = 30
 `eval_harness/official.py` does the following, for the book named in `AGENTSWITCH_INSTANCE`:
 1. **Checks the platform and the model.** The seat token must work on MCP and REST, and the model must answer in
    schema-bound JSON. Each check is a row.
-2. **Runs the tasks whose answer keys are decided** (`--ready-only`). The others are listed in the summary as left
-   out.
+2. **Runs two tasks per book** (`--only`): the seat's whole request ("What needs my reply today, and find the mail
+   where they agreed the price", both checks) and one refusal (a price the mail does not support). One token budget
+   covers both books, so the official run keeps to the minimum; every other task runs locally. `--ready-only` still
+   leaves out a task whose answer keys are not decided.
 3. **Scores each task right after its run** and rewrites `results.json` after every task: *approve* → passed;
    *revise* and *unevaluated* → not passed, with the reason as the evidence.
 
 How it handles trouble:
 - **Time:** each task has its own time cap inside a 27-minute budget, or less when the runner says less time is left
   (`AGENTSWITCH_SECONDS_LEFT`).
+- **Tokens:** the run's token budget (300,000) is shared by both books, so each book keeps to its share of the 270,000
+  left after a 10% reserve: Suryodaya 100,000, Keystone 170,000, because Keystone's two mailboxes cost about twice as
+  much (`--token-budget`, `OFFICIAL_TOKEN_BUDGET`). Once a share is used, the remaining tasks are written as not run.
+  Each row shows its seconds and tokens. The rehearsal of the official tasks used 63k on Suryodaya and 128k on
+  Keystone.
 - **A spent model budget** (429 `budget_exhausted`) stops at once.
+- **Reasoning off:** the model is asked not to reason in both ways a server may expect
+  (`chat_template_kwargs.enable_thinking=false` and `reasoning_effort: "none"`). The model row shows thinking tokens.
 - **Anything unexpected** becomes a row, never a crash.
 - **Tokens and addresses** are kept out of the evidence.
-- **The second opinion is skipped**, because the runner gives one model.
+- **The second opinion is skipped**, because the runner gives one model. **The quality score is skipped** too: it
+  never changes an answer, and it costs a model call per goal.
 
 ```bash
 uv run eval-official --list --ready-only      # which tasks would run on this book, and why the others would not
@@ -130,7 +140,7 @@ uv run eval-official --validate results.json  # is the file in the runner's form
 ## Run them
 
 ```bash
-uv run pytest                 # 90 tests, every one except the load tests: about 11 s, no network, no keys
+uv run pytest                 # 97 tests, every one except the load tests: about 11 s, no network, no keys
 uv run pytest -m scale -s     # the load tests (50,000 messages): about 25 s, with the numbers printed
 ```
 
@@ -181,15 +191,17 @@ A test checks what a person would see:
 | **Memory is kept per customer:** a fact comes back for that customer only; a switched-off memory stops counting | `test_memory.py` |
 | **The watcher is safe to leave running:** our own changes never wake it; floods and daily ceilings are refused; nothing is handled twice | `test_watcher.py` |
 | **Things happening at once do not collide:** parallel steps, AI calls and platform calls within limits; two runs on one folder; rows changing mid-read | `test_concurrency.py` |
+| **The official run always leaves a valid `results.json`:** missing variables, a refused token, the time running out, a spent budget, an unexpected error | `test_official_run.py`, `test_runner_model.py` |
 | **What a person reads is right:** the trace and the run page for crashed, resumed and waiting runs | `test_observability.py` |
 
-## Every test, by file (70 in all)
+## Every test, by file (73 in all)
 
-### `test_seat_requests.py` (7)
+### `test_seat_requests.py` (8)
 
 The seat's own requests, end to end: the real agent, graph, flows and write path, with only the model and the platform faked. Each test reads the result where a user would see it: the book and the run's files.
 
 - reply triage flags only the conversations waiting on us
+- a conversation already flagged is named in the write step so the evidence check can see it
 - an agreed price is recorded with its figures and the conversation starred
 - a price whose figures do not add up is never recorded
 - the full seat request ends each goal exactly once
@@ -219,7 +231,7 @@ The book is shared with team 11, so what the agent may change is decided by code
 - rejecting the approval writes nothing and still answers
 - a watcher run cannot write outside its own conversation
 
-### `test_model_trouble.py` (9)
+### `test_model_trouble.py` (11)
 
 What happens when the model misbehaves in production: rate limits, dead keys, plans that make no sense, verdicts about the wrong conversations, two models that disagree, a budget that runs out, a critic that never says yes.
 
@@ -232,6 +244,8 @@ What happens when the model misbehaves in production: rate limits, dead keys, pl
 - a conversation the second model disputes is held not written
 - the model call budget is never overspent
 - a critic that keeps rejecting is overruled after two tries
+- once its token share is used the route stops like a spent budget
+- with the quality score off the answer is the same and no verifier is asked
 
 ### `test_large_inbox.py` (8)
 

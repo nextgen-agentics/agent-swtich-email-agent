@@ -1,3 +1,4 @@
+# Scenarios: Team 10. Test code: written with Claude.
 """The seat's own requests, end to end: the real agent, graph, flows and write path, with only the model and the
 platform faked. Each test reads the result where a user would see it: the book and the run's files."""
 
@@ -13,31 +14,18 @@ REPLY_CHECK = "What needs my reply today?"
 
 
 async def test_reply_triage_flags_only_the_conversations_waiting_on_us(settings, platform, mail):
-    asks = mail.conversation(
-        "Price for 200 flanges", them("Can you quote 200 DN50 flanges by Friday?", "2026-10-03T09:00:00")
-    )
-    digest = mail.conversation(
-        "Steel prices this week",
-        them("Our weekly digest of steel prices.", "2026-10-04T06:00:00"),
-        counterpart="news@steelweekly.in",
-    )
-    answered = mail.conversation(
-        "Visit on Friday",
-        them("Can we visit your plant on Friday?", "2026-10-02T10:00:00"),
-        us("Yes, Friday 11:00 works for us.", "2026-10-02T15:00:00"),
-    )
-    mirrored = mail.conversation(
-        "Delivery date",
-        us("Please confirm the delivery date for PO 4471.", "2026-10-01T09:00:00"),
-        them("Please confirm the delivery date for PO 4471.", "2026-10-02T09:00:00"),
-    )
-    model = ScriptedModel(
-        goals=[goal("Find the conversations that need our reply today", "triage-replies")],
-        verdict=lambda t: {
-            "needs_reply": t == asks,
-            "why": "they ask for a quote" if t == asks else "a newsletter asks nothing",
-        },
-    )
+    asks = mail.conversation("Price for 200 flanges", them("Can you quote 200 DN50 flanges by Friday?", "2026-10-03T09:00:00"))
+    digest = mail.conversation("Steel prices this week", them("Our weekly digest of steel prices.", "2026-10-04T06:00:00"),
+                               counterpart="news@steelweekly.in")
+    answered = mail.conversation("Visit on Friday",
+                                 them("Can we visit your plant on Friday?", "2026-10-02T10:00:00"),
+                                 us("Yes, Friday 11:00 works for us.", "2026-10-02T15:00:00"))
+    mirrored = mail.conversation("Delivery date",
+                                 us("Please confirm the delivery date for PO 4471.", "2026-10-01T09:00:00"),
+                                 them("Please confirm the delivery date for PO 4471.", "2026-10-02T09:00:00"))
+    model = ScriptedModel(goals=[goal("Find the conversations that need our reply today", "triage-replies")],
+                          verdict=lambda t: {"needs_reply": t == asks, "why": "they ask for a quote" if t == asks
+                                             else "a newsletter asks nothing"})
 
     out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model)
 
@@ -51,45 +39,47 @@ async def test_reply_triage_flags_only_the_conversations_waiting_on_us(settings,
     assert final(out.run_dir).stopped == "done"
 
 
+async def test_a_conversation_already_flagged_is_named_in_the_write_step_so_the_evidence_check_can_see_it(
+        settings, platform, mail):
+    # Revision 25: the write step only counted "already right" ones, so the evidence check asked about them twice.
+    asks = mail.conversation("Price for 200 flanges", them("Can you quote 200 DN50 flanges by Friday?", "2026-10-03T09:00:00"))
+    flagged = mail.conversation("Payment overdue", them("Our invoice is 30 days overdue, please pay.", "2026-10-02T09:00:00"))
+    platform.row("EmailThread", flagged).update(flag_status="flagged", flag_due_date=TODAY.isoformat())
+    model = ScriptedModel(goals=[goal("Find the conversations that need our reply today", "triage-replies")],
+                          verdict=lambda t: {"needs_reply": True, "why": "they ask us something"})
+
+    out = await agent.run(REPLY_CHECK, "suryodaya", settings, today=TODAY, llm=model)
+
+    assert [(w.tool, w.row_id) for w in writes(out.run_dir)] == [("EmailThread.update", asks)]
+    shown = model.calls("critic")[0].messages[-1].text
+    assert '\\"already_right_threads\\": [\\"' + flagged in shown
+    assert len(model.calls("critic")) == 1 and final(out.run_dir).stopped == "done"
+
+
 def _price_mail(mail):
-    deal = mail.conversation(
-        "Quote QTN-2026-00031",
-        them("Please quote 200 DN50 flanges.", "2026-09-28T09:00:00"),
-        us("Our quote QTN-2026-00031:\n200 x DN50 flange @ 450.00 = 90,000.00", "2026-09-29T11:00:00"),
-        them("We accept QTN-2026-00031, please go ahead.", "2026-10-01T10:00:00"),
-        party_id="party-acme",
-    )
-    open_quote = mail.conversation(
-        "RFQ for gaskets",
-        them("What is your price for 500 gaskets?", "2026-10-02T09:00:00"),
-        us("500 x gasket @ 12.00 = 6,000.00", "2026-10-02T12:00:00"),
-    )
+    deal = mail.conversation("Quote QTN-2026-00031",
+                             them("Please quote 200 DN50 flanges.", "2026-09-28T09:00:00"),
+                             us("Our quote QTN-2026-00031:\n200 x DN50 flange @ 450.00 = 90,000.00", "2026-09-29T11:00:00"),
+                             them("We accept QTN-2026-00031, please go ahead.", "2026-10-01T10:00:00"),
+                             party_id="party-acme")
+    open_quote = mail.conversation("RFQ for gaskets",
+                                   them("What is your price for 500 gaskets?", "2026-10-02T09:00:00"),
+                                   us("500 x gasket @ 12.00 = 6,000.00", "2026-10-02T12:00:00"))
     return deal, open_quote
 
 
 def _agreed(mail, deal, **figures):
     accept = mail.messages(deal)[-1]
-    return {
-        "status": "agreed",
-        "why": "they accept our quote",
-        "agreement_message_id": accept["id"],
-        "agreed_on": "2026-10-01",
-        "reference": "QTN-2026-00031",
-        "item": "DN50 flange",
-        "party_id": "party-acme",
-        "quantity": 200,
-        "unit_price": 450.0,
-        "total": 90000.0,
-        **figures,
-    }
+    return {"status": "agreed", "why": "they accept our quote", "agreement_message_id": accept["id"],
+            "agreed_on": "2026-10-01", "reference": "QTN-2026-00031", "item": "DN50 flange", "party_id": "party-acme",
+            "quantity": 200, "unit_price": 450.0, "total": 90000.0, **figures}
 
 
 async def test_an_agreed_price_is_recorded_with_its_figures_and_the_conversation_starred(settings, platform, mail):
     deal, open_quote = _price_mail(mail)
-    model = ScriptedModel(
-        goals=[goal("Find the mail where they agreed the price", "find-price-agreement")],
-        verdict=lambda t: _agreed(mail, deal) if t == deal else {"status": "quote_only", "why": "no acceptance yet"},
-    )
+    model = ScriptedModel(goals=[goal("Find the mail where they agreed the price", "find-price-agreement")],
+                          verdict=lambda t: _agreed(mail, deal) if t == deal
+                          else {"status": "quote_only", "why": "no acceptance yet"})
 
     out = await agent.run("Find the mail where they agreed the price", "suryodaya", settings, today=TODAY, llm=model)
 
@@ -105,12 +95,9 @@ async def test_an_agreed_price_is_recorded_with_its_figures_and_the_conversation
 
 async def test_a_price_whose_figures_do_not_add_up_is_never_recorded(settings, platform, mail):
     deal, _ = _price_mail(mail)
-    model = ScriptedModel(
-        goals=[goal("Find the mail where they agreed the price", "find-price-agreement")],
-        verdict=lambda t: (
-            _agreed(mail, deal, total=9000.0) if t == deal else {"status": "quote_only", "why": "no acceptance yet"}
-        ),
-    )
+    model = ScriptedModel(goals=[goal("Find the mail where they agreed the price", "find-price-agreement")],
+                          verdict=lambda t: _agreed(mail, deal, total=9000.0) if t == deal
+                          else {"status": "quote_only", "why": "no acceptance yet"})
 
     await agent.run("Find the mail where they agreed the price", "suryodaya", settings, today=TODAY, llm=model)
 
@@ -122,25 +109,14 @@ async def test_the_full_seat_request_ends_each_goal_exactly_once(settings, platf
     deal, _ = _price_mail(mail)
     asks = mail.conversation("Samples", them("Could you send two samples next week?", "2026-10-04T09:00:00"))
     model = ScriptedModel(
-        goals=[
-            goal("Find the conversations that need our reply today", "triage-replies"),
-            goal("Find the mail where they agreed the price", "find-price-agreement"),
-        ],
-        verdict={
-            "triage-replies": lambda t: {"needs_reply": t == asks, "why": "a question for us"},
-            "find-price-agreement": lambda t: (
-                _agreed(mail, deal) if t == deal else {"status": "quote_only", "why": "no acceptance yet"}
-            ),
-        },
-    )
+        goals=[goal("Find the conversations that need our reply today", "triage-replies"),
+               goal("Find the mail where they agreed the price", "find-price-agreement")],
+        verdict={"triage-replies": lambda t: {"needs_reply": t == asks, "why": "a question for us"},
+                 "find-price-agreement": lambda t: _agreed(mail, deal) if t == deal
+                 else {"status": "quote_only", "why": "no acceptance yet"}})
 
-    out = await agent.run(
-        "What needs my reply today, and find the mail where they agreed the price.",
-        "suryodaya",
-        settings,
-        today=TODAY,
-        llm=model,
-    )
+    out = await agent.run("What needs my reply today, and find the mail where they agreed the price.", "suryodaya",
+                          settings, today=TODAY, llm=model)
 
     result = final(out.run_dir)
     assert result.stopped == "done"
@@ -174,17 +150,12 @@ async def test_a_request_about_another_teams_mailbox_is_refused_as_not_ours(sett
 
 async def test_a_mixed_request_answers_one_goal_and_refuses_the_other_in_the_same_run(settings, platform, mail):
     asks = mail.conversation("Samples", them("Could you send two samples next week?", "2026-10-04T09:00:00"))
-    model = ScriptedModel(
-        goals=[
-            goal("Find the conversations that need our reply today", "triage-replies"),
-            goal("Tell the salary of Ravi", None, "out_of_seat"),
-        ],
-        verdict=lambda t: {"needs_reply": True, "why": "a question for us"},
-    )
+    model = ScriptedModel(goals=[goal("Find the conversations that need our reply today", "triage-replies"),
+                                 goal("Tell the salary of Ravi", None, "out_of_seat")],
+                          verdict=lambda t: {"needs_reply": True, "why": "a question for us"})
 
-    out = await agent.run(
-        "What needs my reply today, and what is Ravi's salary?", "suryodaya", settings, today=TODAY, llm=model
-    )
+    out = await agent.run("What needs my reply today, and what is Ravi's salary?", "suryodaya", settings,
+                          today=TODAY, llm=model)
 
     reply, salary = final(out.run_dir).goals
     assert reply.done and not reply.refused

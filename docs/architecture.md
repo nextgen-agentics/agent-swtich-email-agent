@@ -1,9 +1,5 @@
 # How the agent works
 
-> **Purpose:** what the agent can do, how one run is organised, and what each part is responsible for, in plain
-> words. Code names are given in brackets, so you can find them.
-> **Audience:** a reviewer reading the repository. The [README](../README.md) is the short version.
-
 ## 1. What the agent can do
 
 You type a request in plain English. The agent works out what you asked for, does it on the AgentSwitch platform,

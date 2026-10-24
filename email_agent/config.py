@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     llm_wait_max_s: float = 120.0      # when every option is resting, wait at most this long
     llm_breaker_s: float = 60.0        # an option with server trouble rests this long before it is tried again
     llm_timeout_s: float = 180.0       # one model call; past it (or a hard ceiling per option) = server trouble
+    llm_token_limit: int | None = None  # stop calling the model after this many billed tokens (None = no limit); the
+                                        # official run sets its share of the run's token budget (Revision 25)
 
     # the graph (Revision 12): limits per run, all saved in run.sqlite so a resumed run keeps what it spent
     max_workers: int = 6               # graph nodes running at once
@@ -112,6 +114,8 @@ class Settings(BaseSettings):
     mcp_close_timeout_s: float = 20.0  # between tasks, 2026-10-04); closing it: the session DELETE
     max_planner_rounds: int = 12
     validate_verdicts: bool = True     # cross-model check of write-causing verdicts before writing (Stage 5)
+    verify_answers: bool = True        # the quality score after each answer (it never changes the answer); the
+                                       # official run turns it off to save tokens (Revision 25)
     max_llm_calls: int = 80
     max_nodes: int = 80                # every node, shards included
     http_timeout_s: float = 60.0

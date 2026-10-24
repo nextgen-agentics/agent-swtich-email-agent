@@ -15,7 +15,7 @@ The same code runs unchanged on both company books:
 ![The run page of one real run: goals, the graph of steps, every model call and every write](docs/images/run-page.png)
 
 **In numbers:** about 11,400 lines of agent code and 1,300 lines of test suite, with no agent framework. There are 24
-test-suite tasks, 12 of which must be refused, and 90 offline tests plus 4 load tests. We filed 25 bug reports against
+test-suite tasks, 12 of which must be refused, and 73 offline tests plus 4 load tests. We filed 25 bug reports against
 the platform.
 
 ## Contents
@@ -171,12 +171,13 @@ uv run eval-score eval_runs/<batch>       # verdicts, report.md and a web page
 
 **The official run.** AgentSwitch runs the same suite on its own server against a fresh copy of each book, with its
 own model and our seat's token. [`agentswitch-harness.toml`](agentswitch-harness.toml) tells it how:
-`python -m eval_harness.official --ready-only`. That command checks the platform and the model, runs the tasks whose
-answer keys are decided, and writes `results.json` after every task. Each task has its own time cap, an unexpected
-failure becomes a row rather than a crash, and secrets are kept out of the evidence. Details:
+`python -m eval_harness.official --ready-only --only …`. That command checks the platform and the model, runs two tasks
+per book (the seat's whole request and one refusal), and writes `results.json` after every task. One token budget
+covers both books, so each book keeps to its share and reasoning is switched off. Each task has its own time cap, an
+unexpected failure becomes a row rather than a crash, and secrets are kept out of the evidence. Details:
 [docs/testing.md](docs/testing.md#6-the-official-run).
 
-**Offline tests** ([`tests/`](tests), 90 tests, about 11 seconds, no network or keys). Each test runs the real agent
+**Offline tests** ([`tests/`](tests), 73 tests, about 11 seconds, no network or keys). Each test runs the real agent
 against a fake AgentSwitch and a scripted model. They cover:
 - crashes and resume (no change ever sent twice);
 - write safety;
@@ -257,6 +258,8 @@ The main settings (in `.env`):
 ## 8. Known limits
 
 - **On official runs, the second opinion is skipped**, because the runner provides one model (section 4).
+- **Official runs check only two tasks per book**, so both books fit the run's one token budget; the other
+  tasks run locally.
 - **A price agreement must be quantity × unit price.** A lump-sum fee cannot be recorded yet.
 - **Code picks the price candidates with word and amount rules** (quote, price, order, fee, invoice, any money
   amount). Mail about prices that uses none of them is not reviewed.
