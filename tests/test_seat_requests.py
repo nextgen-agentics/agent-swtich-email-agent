@@ -1,4 +1,3 @@
-# Scenarios: Team 10. Test code: written with Claude.
 """The seat's own requests, end to end: the real agent, graph, flows and write path, with only the model and the
 platform faked. Each test reads the result where a user would see it: the book and the run's files."""
 

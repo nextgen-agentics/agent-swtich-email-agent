@@ -135,8 +135,6 @@ uv run eval-official --validate results.json  # is the file in the runner's form
 
 # Offline tests
 
-> The scenarios were chosen by Team 10; the test code was written with Claude (each file says so in its first line).
-
 ## Run them
 
 ```bash
