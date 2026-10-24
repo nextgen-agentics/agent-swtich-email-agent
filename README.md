@@ -189,8 +189,7 @@ against a fake AgentSwitch and a scripted model. They cover:
 - concurrency;
 - the official run.
 
-A load test runs a 50,000-message mailbox (`uv run pytest -m scale -s`). The scenarios were chosen by Team 10; the
-test code was written with Claude, as the first line of each file says. File by file:
+A load test runs a 50,000-message mailbox (`uv run pytest -m scale -s`). File by file:
 [docs/testing.md](docs/testing.md).
 
 ---
